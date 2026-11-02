@@ -28,6 +28,8 @@ set_target_properties(chinese_ime_lm PROPERTIES IMPORTED_LOCATION "${NEURAL_RUST
 # Internal headers used by this filter need this generated configuration too.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/neural-include/rime/build_config.h"
     "#pragma once\n#define RIME_ENABLE_LOGGING\n")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/neural-include/X11/keysym.h"
+    "#pragma once\n")
 set(NEURAL_CORRECTION_SOURCES "${NEURAL_DIR}/correction-distance.cpp")
 set(NEURAL_SYLLABIFIER_SYMBOL "_ZN4rime11Syllabifier18BuildSyllableGraphERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEERNS_5PrismEPNS_13SyllableGraphE")
 target_sources(rime PRIVATE "${NEURAL_DIR}/neural-reranker.cpp" ${NEURAL_CORRECTION_SOURCES})

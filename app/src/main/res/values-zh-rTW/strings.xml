@@ -316,4 +316,10 @@
     <string name="emoji_skin_tone_type_6">🏿 深膚色 (Type-6)</string>
     <string name="hide_unsupported_emojis">隱藏不支援的表情</string>
     <string name="preferred_voice_input">首選語音輸入</string>
+    <string name="toolbar_emoji_key">工具列表情鍵</string>
+    <string name="toolbar_emoji_key_summary">在工具列左側顯示表情鍵，並將鍵盤上的逗號/表情鍵替換為分詞符（\'）</string>
+    <string name="copy">複製</string>
+    <string name="copied_to_clipboard">已複製到剪貼簿</string>
+    <string name="cannot_paste_image">目前輸入框不支援貼上圖片</string>
+    <string name="clipboard_image_preview">[圖片]</string>
 </resources>

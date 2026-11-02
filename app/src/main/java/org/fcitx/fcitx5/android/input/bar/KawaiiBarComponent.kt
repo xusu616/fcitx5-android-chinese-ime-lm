@@ -62,12 +62,14 @@ import org.fcitx.fcitx5.android.input.editing.TextEditingWindow
 import org.fcitx.fcitx5.android.input.keyboard.CommonKeyActionListener
 import org.fcitx.fcitx5.android.input.keyboard.CustomGestureView
 import org.fcitx.fcitx5.android.input.keyboard.KeyboardWindow
+import org.fcitx.fcitx5.android.input.picker.PickerWindow
 import org.fcitx.fcitx5.android.input.popup.PopupComponent
 import org.fcitx.fcitx5.android.input.status.StatusAreaWindow
 import org.fcitx.fcitx5.android.input.wm.InputWindow
 import org.fcitx.fcitx5.android.input.wm.InputWindowManager
 import org.fcitx.fcitx5.android.utils.AppUtil
 import org.fcitx.fcitx5.android.utils.InputMethodUtil
+import org.fcitx.fcitx5.android.utils.toast
 import org.mechdancer.dependency.DynamicScope
 import org.mechdancer.dependency.manager.must
 import splitties.bitflags.hasFlag
@@ -105,6 +107,17 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
     private val toolbarNumRowOnPassword by prefs.keyboard.toolbarNumRowOnPassword
     private val showVoiceInputButton by prefs.keyboard.showVoiceInputButton
     private val preferredVoiceInput by prefs.keyboard.preferredVoiceInput
+    private val toolbarEmojiKey = prefs.symbols.toolbarEmojiKey
+
+    @Keep
+    private val toolbarEmojiKeyListener = ManagedPreference.OnChangeListener<Boolean> { _, v ->
+        idleUi.setToolbarEmojiMode(v)
+        evalIdleUiState()
+    }
+
+    init {
+        toolbarEmojiKey.registerOnChangeListener(toolbarEmojiKeyListener)
+    }
 
     private var clipboardTimeoutJob: Job? = null
 
@@ -123,10 +136,12 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
         ClipboardManager.OnClipboardUpdateListener {
             if (!clipboardSuggestion.getValue()) return@OnClipboardUpdateListener
             service.lifecycleScope.launch {
-                if (it.text.isEmpty()) {
+                if (it.text.isEmpty() && it.imagePath.isNullOrEmpty()) {
                     isClipboardFresh = false
                 } else {
-                    idleUi.clipboardUi.text.text = if (it.sensitive && clipboardMaskSensitive) {
+                    idleUi.clipboardUi.text.text = if (!it.imagePath.isNullOrEmpty()) {
+                        context.getString(R.string.clipboard_image_preview)
+                    } else if (it.sensitive && clipboardMaskSensitive) {
                         ClipboardEntry.BULLET.repeat(min(42, it.text.length))
                     } else {
                         it.text.take(42)
@@ -179,6 +194,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
             isClipboardFresh -> IdleUi.State.Clipboard
             isInlineSuggestionPresent -> IdleUi.State.InlineSuggestion
             isCapabilityFlagsPassword && !isKeyboardLayoutNumber && numberRowState != NumberRowState.ForceHide -> IdleUi.State.NumberRow
+            toolbarEmojiKey.getValue() -> IdleUi.State.Toolbar
             /**
              * state matrix:
              *                               expandToolbarByDefault
@@ -263,24 +279,29 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
 
     private val idleUi: IdleUi by lazy {
         IdleUi(context, theme, popup, commonKeyActionListener).apply {
+            setToolbarEmojiMode(toolbarEmojiKey.getValue())
             menuButton.setOnClickListener {
-                when (idleUi.currentState) {
-                    IdleUi.State.Empty -> {
-                        isToolbarManuallyToggled = !expandToolbarByDefault
-                        evalIdleUiState(fromUser = true)
+                if (toolbarEmojiKey.getValue()) {
+                    windowManager.attachWindow(PickerWindow.Key.Emoji)
+                } else {
+                    when (idleUi.currentState) {
+                        IdleUi.State.Empty -> {
+                            isToolbarManuallyToggled = !expandToolbarByDefault
+                            evalIdleUiState(fromUser = true)
+                        }
+                        IdleUi.State.Toolbar -> {
+                            isToolbarManuallyToggled = expandToolbarByDefault
+                            evalIdleUiState(fromUser = true)
+                        }
+                        else -> {
+                            isToolbarManuallyToggled = !expandToolbarByDefault
+                            idleUi.updateState(IdleUi.State.Toolbar, fromUser = true)
+                        }
                     }
-                    IdleUi.State.Toolbar -> {
-                        isToolbarManuallyToggled = expandToolbarByDefault
-                        evalIdleUiState(fromUser = true)
+                    // reset timeout timer (if present) when user switch layout
+                    if (clipboardTimeoutJob != null) {
+                        launchClipboardTimeoutJob()
                     }
-                    else -> {
-                        isToolbarManuallyToggled = !expandToolbarByDefault
-                        idleUi.updateState(IdleUi.State.Toolbar, fromUser = true)
-                    }
-                }
-                // reset timeout timer (if present) when user switch layout
-                if (clipboardTimeoutJob != null) {
-                    launchClipboardTimeoutJob()
                 }
             }
             hideKeyboardButton.apply {
@@ -310,7 +331,14 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
             clipboardUi.suggestionView.apply {
                 setOnClickListener {
                     ClipboardManager.lastEntry?.let {
-                        service.commitText(it.text)
+                        if (!it.imagePath.isNullOrEmpty()) {
+                            val success = service.commitImage(it)
+                            if (!success) {
+                                context.toast(R.string.cannot_paste_image)
+                            }
+                        } else {
+                            service.commitText(it.text)
+                        }
                     }
                     clipboardTimeoutJob?.cancel()
                     clipboardTimeoutJob = null

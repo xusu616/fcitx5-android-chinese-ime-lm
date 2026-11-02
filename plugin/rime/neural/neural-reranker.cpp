@@ -3,6 +3,7 @@
 #include "candidate-policy.h"
 #include "contextual-ranking.h"
 #include "contextual-score-policy.h"
+#include "commit-context.h"
 #include "sentence-alternatives.h"
 #include "typing-corrector.h"
 #include "sentence-decoder.h"
@@ -22,6 +23,7 @@
 #include <rime/engine.h>
 #include <rime/dict/corrector.h>
 #include <rime/filter.h>
+#include <rime/key_event.h>
 #include <rime/registry.h>
 #include <rime/schema.h>
 #include <rime/translation.h>
@@ -125,10 +127,27 @@ public:
         engine_->schema()->config()->GetBool(name_space_ + "/enable_contextual_abbreviations", &contextualAbbreviations_);
         engine_->schema()->config()->GetBool(name_space_ + "/enable_sentence_alternatives", &alternatives_);
         engine_->schema()->config()->GetBool(name_space_ + "/enable_mixed_abbreviations", &mixedAbbreviations_);
+        engine_->schema()->config()->GetBool(name_space_ + "/use_commit_history", &commitHistory_);
         auto clear = [this](rime::Context *) { decoderCache_.Clear(); };
-        committed_ = engine_->context()->commit_notifier().connect(clear);
+        committed_ = engine_->context()->commit_notifier().connect([this](rime::Context *ctx) {
+            decoderCache_.Clear();
+            shadowHistory_ = ctx->commit_history();
+        });
         aborted_ = engine_->context()->abort_notifier().connect(clear);
         deleted_ = engine_->context()->delete_notifier().connect(clear);
+        unhandledKey_ = engine_->context()->unhandled_key_notifier().connect(
+            [this](rime::Context *ctx, const rime::KeyEvent &key) {
+                if (key.release()) return;
+                if (key.modifier() == 0 && key.keycode() == 0xff08) {
+                    chinese_ime_lm::popCommittedCharacter(shadowHistory_);
+                    ctx->commit_history() = shadowHistory_;
+                } else if (key.keycode() >= 0xff50 && key.keycode() <= 0xff57) {
+                    shadowHistory_.clear();
+                    ctx->commit_history().clear();
+                } else {
+                    shadowHistory_ = ctx->commit_history();
+                }
+            });
         if (!reranking_ && !aggressive_) return;
         std::string modelName;
         const bool customModel = engine_->schema()->config()->GetString(
@@ -145,6 +164,7 @@ public:
         committed_.disconnect();
         aborted_.disconnect();
         deleted_.disconnect();
+        unhandledKey_.disconnect();
     }
 
     bool AppliesToSegment(rime::Segment *segment) override {
@@ -172,20 +192,14 @@ public:
             return source;
         }
         const auto *ctx = engine_->context();
+        if (!ctx->commit_history().empty()) shadowHistory_ = ctx->commit_history();
         const auto first = source->Peek();
         const auto genuine = rime::Candidate::GetGenuineCandidate(first);
         if (genuine && contextualReranking_ && reranking_ &&
             (genuine->type() == "phrase" || genuine->type() == "user_phrase") &&
             first->end() == ctx->input().size()) {
-            bool useHistory = true;
-            engine_->schema()->config()->GetBool(name_space_ + "/use_commit_history", &useHistory);
-            std::string context;
-            if (useHistory) {
-                for (const auto &record : ctx->commit_history()) {
-                    if (record.type == "thru" || record.type == "raw") context.clear();
-                    else context += record.text;
-                }
-            }
+            std::string context = commitHistory_
+                ? chinese_ime_lm::committedContext(ctx->commit_history()) : std::string();
             context += ctx->composition().GetTextBefore(first->start());
             if (!context.empty()) {
                 rime::CandidateList candidates;
@@ -247,8 +261,13 @@ public:
             candidates.push_back(std::move(candidate));
             source->Next();
         }
-        // Only already-selected segments of this composition are used as context.
-        const auto context = ctx->composition().GetTextBefore(first->start());
+        // Context = text this Rime session committed earlier (in memory, at most
+        // 20 records, cleared by Return/BackSpace) + segments already selected in
+        // this composition. Without the former, every new input after a commit
+        // was scored with an empty context and the previous word was ignored.
+        std::string context = commitHistory_
+            ? chinese_ime_lm::committedContext(ctx->commit_history()) : std::string();
+        context += ctx->composition().GetTextBefore(first->start());
         if (alternatives_)
             chinese_ime_lm::appendSentenceAlternatives(candidates, kCandidateCount - 1);
         std::vector<const char *> texts;
@@ -259,8 +278,7 @@ public:
                 ctx->input().size(), origin ? origin->type() : ""));
             texts.push_back(candidate->text().c_str());
         }
-        // Only already-selected segments of this composition are used as context.
-        // This does not read the clipboard, other apps, or previous input fields.
+        // The context never reads the clipboard, app text, or the network.
         const int promoted = reranking_ ? cime_best(model_.get(), context.c_str(), texts.data(),
                                                    facts.data(), texts.size()) : 0;
         if (promoted < 0 || static_cast<size_t>(promoted) >= candidates.size()) {
@@ -297,8 +315,10 @@ private:
     bool contextualAbbreviations_ = true;
     bool alternatives_ = true;
     bool mixedAbbreviations_ = true;
+    bool commitHistory_ = true;
     chinese_ime_lm::DecoderCache decoderCache_;
-    rime::connection committed_, aborted_, deleted_;
+    rime::CommitHistory shadowHistory_;
+    rime::connection committed_, aborted_, deleted_, unhandledKey_;
     struct Deleter { void operator()(void *handle) const { cime_free(handle); } };
     std::unique_ptr<void, Deleter> model_;
 };

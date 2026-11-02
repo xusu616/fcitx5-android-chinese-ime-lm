@@ -9,12 +9,14 @@ import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
+import androidx.annotation.Keep
 import androidx.core.content.ContextCompat
 import androidx.transition.Slide
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.CapabilityFlags
 import org.fcitx.fcitx5.android.core.InputMethodEntry
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
+import org.fcitx.fcitx5.android.data.prefs.ManagedPreference
 import org.fcitx.fcitx5.android.input.bar.KawaiiBarComponent
 import org.fcitx.fcitx5.android.input.broadcast.InputBroadcastReceiver
 import org.fcitx.fcitx5.android.input.broadcast.ReturnKeyDrawableComponent
@@ -73,6 +75,21 @@ class KeyboardWindow : InputWindow.SimpleInputWindow<KeyboardWindow>(), Essentia
     }
     private var currentKeyboardName = ""
     private var lastSymbolType: String by AppPrefs.getInstance().internal.lastSymbolLayout
+
+    private val toolbarEmojiKey = AppPrefs.getInstance().symbols.toolbarEmojiKey
+
+    @Keep
+    private val toolbarEmojiKeyListener = ManagedPreference.OnChangeListener<Boolean> { _, _ ->
+        keyboards[TextKeyboard.Name] = TextKeyboard(context, theme)
+        if (currentKeyboardName == TextKeyboard.Name && ::keyboardView.isInitialized) {
+            detachCurrentLayout()
+            attachLayout(TextKeyboard.Name)
+        }
+    }
+
+    init {
+        toolbarEmojiKey.registerOnChangeListener(toolbarEmojiKeyListener)
+    }
 
     private val currentKeyboard: BaseKeyboard? get() = keyboards[currentKeyboardName]
 

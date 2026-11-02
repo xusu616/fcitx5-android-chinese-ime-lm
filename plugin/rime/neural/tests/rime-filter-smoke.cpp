@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Runs against the same Android prebuilt libraries as the APK. No user data.
 #include "neural-reranker.h"
+#include "commit-context.h"
 #include "contextual-ranking.h"
 #include "sentence-alternatives.h"
 #include "sentence-decoder.h"
@@ -473,6 +474,16 @@ int main(int argc, char **argv) {
     require(api->get_commit(session, &expandedCommit), "Expanded sentence did not commit");
     require(std::string(expandedCommit.text) == "我再用用看", "Expanded commit changed identity");
     api->free_commit(&expandedCommit);
+    auto *sessionCtx = rime::Service::instance().GetSession(session)->context();
+    api->process_key(session, 0xff08, 0);
+    api->process_key(session, 0xff08, 0);
+    const auto afterBackspace = chinese_ime_lm::committedContext(sessionCtx->commit_history());
+    require(afterBackspace.size() >= 9 &&
+            afterBackspace.substr(afterBackspace.size() - 9) == "我再用",
+            "Unhandled BackSpace wiped earlier committed words instead of popping characters");
+    api->process_key(session, 0xff51, 0);
+    require(chinese_ime_lm::committedContext(sessionCtx->commit_history()).empty(),
+            "Cursor navigation key did not clear committed history");
     const long after = residentKb();
     std::cout << "RSS before_kb=" << before << " loaded_kb=" << loaded
               << " after_inference_kb=" << after << " delta_kb=" << after - before

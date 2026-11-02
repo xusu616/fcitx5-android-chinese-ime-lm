@@ -6,7 +6,7 @@
 - 无前文时保留词典整词首选；有前文时可比较同音词或同一合法简拼的不同展开。不改变补全、前缀或非 `abc` 分段。
 - 可选的通用相邻字母颠倒纠错见 [纠错方法和实测限制](CORRECTION.md)。当前权重未重新训练。
 - `0.1.4` 增加跨排邻键、每音节两步键盘纠错，以及沿真实拼音路径组合完整候选的束搜索；现有首选排序保留，新组合放在其后供选择。
-- 自动组句使用当前组合中已选的前文；分次词语重排还可使用 Rime 会话已提交文字。不读取剪贴板或其他应用的文字。
+- 上下文 = 本输入法在当前 Rime 会话中已提交的文字（仅内存，最多 20 条，回车/方向键清空，退格按字符回退）+ 当前组合中已选中的前文，因此下一次输入会参考上一个词。不读取剪贴板或其他应用的文字。可用 `use_commit_history: false` 关闭。
 - 诊断日志默认关闭；`enable_logging: true` 才输出模型成功加载、重排索引和耗时。加载失败及推理错误仍输出，不记录输入文本。
 - 暂支持 `arm64-v8a`，原版主程序无需修改。插件基于 `048f581c`，应搭配同版本主程序；升级原生库时需重新核对 Rime 头文件和 Fcitx ABI。
 
@@ -190,6 +190,7 @@ patch:
   chinese_ime_lm/enable_sentence_alternatives: true  # 同音前缀词条扩展
   chinese_ime_lm/enable_mixed_abbreviations: true  # 保留完整音节首选，补充混合简拼词
   chinese_ime_lm/aggressive: true  # 更积极生成完整组合候选，默认开启
+  chinese_ime_lm/use_commit_history: true  # 以本会话已提交的文字作上下文，默认开启
 ```
 
 将这一项合并到已有 `patch:`，不要覆盖原有设置。自定义滤镜顺序时，把 `chinese_ime_lm` 放在 `uniquifier` 前、文字转换滤镜后。随后重新部署 Rime 并重启 Fcitx 实例。排查时先临时开启诊断日志，再用 `adb logcat -s ChineseImeLm` 检查模型加载和推理。
@@ -216,6 +217,8 @@ patch:
 | `enable_sentence_alternatives` | `true` | 用同音前缀词条补充完整句子，参与原有重排 |
 | `enable_mixed_abbreviations` | `true` | 如 `shuo` 补充 `s'huo → 生活`；只查真实双音节词，保留原首选 |
 | `aggressive` | `true` | 重新组合词典分词，补充完整候选供选择 |
+| `use_commit_history` | `true` | 把本会话之前提交的文字作为模型上下文；`false` 时只用当前组合中已选的分段 |
+| `model` | 内置 `sentence-model.safetensors` | 从 Rime 用户目录加载自定义 `.safetensors` 权重文件名 |
 
 `enable_mixed_abbreviations` 独立于 `translator/enable_correction`、`aggressive` 和模型重排。它补回“简拼前缀 + 完整音节”的真实词典词，例如 `shuo → 生活`、`shui → 社会`、`fan → 方案`；“说/水/饭”等原首选保留。设为 `false` 后停止补充；显式输入 `s'huo` 仍由原方案解析。测试和限制见 [混合简拼诊断](CORRECTION.md#合法全拼遮住混合简拼shuo-与-shuo)。
 
@@ -288,7 +291,43 @@ adb shell pm enable org.fcitx.fcitx5.android.plugin.rime
   chinese_ime_lm/use_commit_history: true
 ```
 
-第一项设为 `false` 可恢复完整词典首选保护；第二项设为 `false` 后，不使用此前已上屏文字，仅使用当前组合中已选的前文。历史仅来自 Rime 会话内存（最多 20 条，经过 Rime 的未处理回车或退格会清空），本分支遇到原始字母或透传字符也会截断前文；不读取聊天框或其他应用文字、不持久化或记录正文。光标移动、应用直接删字和切换应用不一定清空该历史，因此它不保证等于当前编辑器前文。修改后重新部署 Rime 并重启 Fcitx 实例。测试结果和限制见 [分次输入诊断](CORRECTION.md#分次输入的词典首选与上下文)。
+第一项设为 `false` 可恢复完整词典首选保护；第二项设为 `false` 后，不使用此前已上屏文字，仅使用当前组合中已选的前文。历史仅来自 Rime 会话内存（最多 20 条，经过 Rime 的未处理回车或方向键会清空，退格按字符回退），本分支遇到原始字母或透传字符也会截断前文；不读取聊天框或其他应用文字、不持久化或记录正文。光标移动、应用直接删字和切换应用不一定清空该历史，因此它不保证等于当前编辑器前文。修改后重新部署 Rime 并重启 Fcitx 实例。测试结果和限制见 [分次输入诊断](CORRECTION.md#分次输入的词典首选与上下文)。
+
+## 模型继续预训练与自定义权重加载
+
+`tools/continual_pretrain.py` 提供基于现有 4M `sentence-model.safetensors` 的反量化加载、继续预训练（Continual Pretraining / 领域微调）和逐行对称 INT8 重导出工具。脚本同时支持 **PyTorch（CUDA / CPU）** 与**零外部依赖的纯 NumPy** 两种后端（`--backend auto` 会自动检测），并通过对冻结基座模型施加 KL 散度正则（`--kl-coef`）防止小样本微调时遗忘通用语感。
+
+1. **查看当前模型对特定上下文与候选的评分：**
+
+   ```powershell
+   python plugin/rime/neural/tools/continual_pretrain.py --probe "交叉:编译,贬义,变圆,边缘,便于"
+   ```
+
+2. **混入领域短语、纯文本语料（`--corpus`）或 Rime 词典（`--rime-dict`）继续预训练并导出新权重：**
+
+   ```powershell
+   python plugin/rime/neural/tools/continual_pretrain.py `
+     --phrase "交叉编译" --phrase "交叉编译工具链" --phrase "需要交叉编译" `
+     --phrase "还在排队" --phrase "生日派对" --phrase "重庆和成都之间" --phrase "可以直接" `
+     --steps 30 --lr 2e-4 --kl-coef 0.3 `
+     --output sentence-model-custom.safetensors
+   ```
+
+   导出后可用宿主机 `ffi-smoke` 验证权重结构与基础重排：
+
+   ```sh
+   cargo run --manifest-path plugin/rime/neural/Cargo.toml --release --example ffi-smoke -- sentence-model-custom.safetensors
+   ```
+
+3. **在手机上免重编 APK 加载自定义模型：**
+   将导出的 `sentence-model-custom.safetensors` 放入手机的 Rime 用户目录（例如 `/storage/emulated/0/Android/data/org.fcitx.fcitx5.android/files/data/rime/`），并在方案 `.custom.yaml` 的现有 `patch:` 下加入：
+
+   ```yaml
+   patch:
+     chinese_ime_lm/model: sentence-model-custom.safetensors
+   ```
+
+   重新部署 Rime 并重启 Fcitx 实例即可生效；移除该行即恢复使用插件内置模型。
 
 ## 授权
 

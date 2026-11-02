@@ -5,8 +5,14 @@
 package org.fcitx.fcitx5.android.data.clipboard
 
 import android.content.ClipboardManager
+import android.content.ContentUris
 import android.content.Context
+import android.database.ContentObserver
+import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import androidx.annotation.Keep
 import androidx.room.Room
 import androidx.room.withTransaction
@@ -26,6 +32,8 @@ import org.fcitx.fcitx5.android.utils.WeakHashSet
 import org.fcitx.fcitx5.android.utils.appContext
 import org.fcitx.fcitx5.android.utils.clipboardManager
 import timber.log.Timber
+import java.io.File
+import java.util.UUID
 
 object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
     CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.Default) {
@@ -65,8 +73,159 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
     private val enabledListener = ManagedPreference.OnChangeListener<Boolean> { _, value ->
         if (value) {
             clipboardManager.addPrimaryClipChangedListener(this)
+            registerScreenshotObserver()
         } else {
             clipboardManager.removePrimaryClipChangedListener(this)
+            unregisterScreenshotObserver()
+        }
+    }
+
+    private var screenshotObserver: ScreenshotObserver? = null
+
+    private fun registerScreenshotObserver() {
+        if (screenshotObserver == null) {
+            val observer = ScreenshotObserver(appContext, Handler(Looper.getMainLooper())) { uri, mimeType ->
+                handleScreenshot(uri, mimeType)
+            }
+            screenshotObserver = observer
+            try {
+                appContext.contentResolver.registerContentObserver(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    true,
+                    observer
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to register screenshot observer")
+            }
+        }
+    }
+
+    private fun unregisterScreenshotObserver() {
+        screenshotObserver?.let {
+            try {
+                appContext.contentResolver.unregisterContentObserver(it)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to unregister screenshot observer")
+            }
+            screenshotObserver = null
+        }
+    }
+
+    private fun handleScreenshot(uri: Uri, mimeType: String) {
+        launch {
+            val file = saveImageToLocal(appContext, uri, mimeType) ?: return@launch
+            val entry = ClipboardEntry(
+                text = "",
+                imagePath = file.absolutePath,
+                timestamp = System.currentTimeMillis(),
+                type = mimeType
+            )
+            mutex.withLock {
+                try {
+                    val insertedEntry = clbDb.withTransaction {
+                        val rowId = clbDao.insert(entry)
+                        removeOutdated()
+                        clbDao.get(rowId) ?: entry
+                    }
+                    updateLastEntry(insertedEntry)
+                    updateItemCount()
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to insert screenshot into clipboard")
+                }
+            }
+        }
+    }
+
+    @JvmStatic
+    fun saveImageToLocal(context: Context, uri: Uri, mimeType: String): File? {
+        return try {
+            val dir = context.filesDir.resolve("clipboard_images")
+            if (!dir.exists()) dir.mkdirs()
+            val ext = when (mimeType) {
+                "image/jpeg", "image/jpg" -> "jpg"
+                "image/gif" -> "gif"
+                "image/webp" -> "webp"
+                else -> "png"
+            }
+            val file = File(dir, "${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.$ext")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                file.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (file.exists() && file.length() > 0) file else null
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to save image to local")
+            null
+        }
+    }
+
+    private class ScreenshotObserver(
+        private val context: Context,
+        handler: Handler,
+        private val onScreenshotDetected: (Uri, String) -> Unit
+    ) : ContentObserver(handler) {
+        private var lastHandledId: Long = -1L
+
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            super.onChange(selfChange, uri)
+            checkScreenshot()
+        }
+
+        private fun checkScreenshot() {
+            try {
+                val projection = arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DISPLAY_NAME,
+                    MediaStore.Images.Media.DATE_ADDED,
+                    MediaStore.Images.Media.MIME_TYPE,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.Images.Media.RELATIVE_PATH else MediaStore.Images.Media.DATA
+                )
+                val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+                context.contentResolver.query(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    projection,
+                    null,
+                    null,
+                    sortOrder
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                        val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                        val dateAddedCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                        val mimeTypeCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+
+                        val id = cursor.getLong(idCol)
+                        if (id == lastHandledId) return
+                        val name = cursor.getString(nameCol) ?: ""
+                        val dateAdded = cursor.getLong(dateAddedCol)
+                        val mimeType = cursor.getString(mimeTypeCol) ?: "image/png"
+
+                        val pathOrRelative = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            val relCol = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+                            if (relCol != -1) cursor.getString(relCol) ?: "" else ""
+                        } else {
+                            val dataCol = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
+                            if (dataCol != -1) cursor.getString(dataCol) ?: "" else ""
+                        }
+
+                        val now = System.currentTimeMillis() / 1000
+                        if (kotlin.math.abs(now - dateAdded) <= 15) {
+                            val isScreenshot = name.contains("screenshot", ignoreCase = true) ||
+                                    name.contains("截屏") ||
+                                    pathOrRelative.contains("screenshot", ignoreCase = true) ||
+                                    pathOrRelative.contains("截屏")
+                            if (isScreenshot) {
+                                lastHandledId = id
+                                val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                                onScreenshotDetected(contentUri, mimeType)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to query MediaStore for screenshot")
+            }
         }
     }
 
@@ -137,11 +296,24 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
     }
 
     suspend fun realDelete() {
+        try {
+            val deleted = clbDao.getDeleted()
+            deleted.forEach { entry ->
+                entry.imagePath?.let { path ->
+                    try { File(path).delete() } catch (_: Exception) {}
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to clean up deleted image files")
+        }
         clbDao.realDelete()
     }
 
     suspend fun nukeTable() {
         withContext(coroutineContext) {
+            try {
+                appContext.filesDir.resolve("clipboard_images").deleteRecursively()
+            } catch (_: Exception) {}
             clbDb.clearAllTables()
             updateItemCount()
         }
@@ -170,9 +342,9 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         launch {
             mutex.withLock {
                 val entry = ClipboardEntry.fromClipData(clip, transformer) ?: return@withLock
-                if (entry.text.isBlank()) return@withLock
+                if (entry.imagePath.isNullOrEmpty() && entry.text.isBlank()) return@withLock
                 try {
-                    clbDao.find(entry.text, entry.sensitive)?.let {
+                    clbDao.find(entry.text, entry.imagePath, entry.sensitive)?.let {
                         updateLastEntry(it.copy(timestamp = entry.timestamp))
                         clbDao.updateTime(it.id, entry.timestamp)
                         return@withLock

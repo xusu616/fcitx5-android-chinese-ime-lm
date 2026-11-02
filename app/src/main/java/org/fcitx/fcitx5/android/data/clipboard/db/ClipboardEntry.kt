@@ -10,6 +10,8 @@ import android.os.Build
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import org.fcitx.fcitx5.android.data.clipboard.ClipboardManager
+import org.fcitx.fcitx5.android.utils.appContext
 import org.fcitx.fcitx5.android.utils.timestamp
 
 @Entity(tableName = ClipboardEntry.TABLE_NAME)
@@ -25,7 +27,9 @@ data class ClipboardEntry(
     @ColumnInfo(defaultValue = "0")
     val deleted: Boolean = false,
     @ColumnInfo(defaultValue = "0")
-    val sensitive: Boolean = false
+    val sensitive: Boolean = false,
+    @ColumnInfo(defaultValue = "NULL")
+    val imagePath: String? = null
 ) {
     companion object {
         const val BULLET = "•"
@@ -43,14 +47,33 @@ data class ClipboardEntry(
             transformer: ((String) -> String)? = null
         ): ClipboardEntry? {
             val desc = clipData.description
-            // TODO: handle multiple items (when does this happen?)
             val item = clipData.getItemAt(0) ?: return null
-            val str = item.text?.toString() ?: return null
             val sensitive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 desc.extras?.getBoolean(IS_SENSITIVE) ?: false
             } else {
                 false
             }
+
+            val isImage = (0 until desc.mimeTypeCount).any {
+                ClipDescription.compareMimeTypes(desc.getMimeType(it), "image/*")
+            }
+            if (isImage && item.uri != null) {
+                val mimeType = (0 until desc.mimeTypeCount)
+                    .map { desc.getMimeType(it) }
+                    .firstOrNull { it.startsWith("image/") } ?: "image/png"
+                val file = ClipboardManager.saveImageToLocal(appContext, item.uri, mimeType)
+                if (file != null) {
+                    return ClipboardEntry(
+                        text = item.text?.toString() ?: "",
+                        imagePath = file.absolutePath,
+                        timestamp = clipData.timestamp(),
+                        type = mimeType,
+                        sensitive = sensitive
+                    )
+                }
+            }
+
+            val str = item.text?.toString() ?: return null
             return ClipboardEntry(
                 text = if (transformer != null) transformer(str) else str,
                 timestamp = clipData.timestamp(),

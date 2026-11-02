@@ -192,6 +192,43 @@ class CommaKey(
     )
 )
 
+class SeparatorKey(
+    percentWidth: Float = 0.1f,
+    variant: Variant = Variant.Alternative
+) : KeyDef(
+    Appearance.Text(
+        displayText = "'",
+        textSize = 23f,
+        percentWidth = percentWidth,
+        variant = variant
+    ),
+    setOf(
+        Behavior.Press(KeyAction.FcitxKeyAction("'"))
+    ),
+    arrayOf(
+        Popup.Preview("'"),
+        Popup.Menu(
+            arrayOf(
+                Popup.Menu.Item(
+                    ",",
+                    R.drawable.ic_baseline_edit_24,
+                    KeyAction.FcitxKeyAction(",")
+                ),
+                Popup.Menu.Item(
+                    "QuickPhrase",
+                    R.drawable.ic_baseline_format_quote_24,
+                    KeyAction.QuickPhraseAction
+                ),
+                Popup.Menu.Item(
+                    "Unicode",
+                    R.drawable.ic_logo_unicode,
+                    KeyAction.UnicodeAction
+                )
+            )
+        )
+    )
+)
+
 class LanguageKey : KeyDef(
     Appearance.Image(
         src = R.drawable.ic_baseline_language_24,

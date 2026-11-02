@@ -11,6 +11,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.text.TextUtils
 import android.view.View
+import android.widget.ImageView
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.data.theme.Theme
 import org.fcitx.fcitx5.android.input.keyboard.CustomGestureView
@@ -42,6 +43,13 @@ class ClipboardEntryUi(override val ctx: Context, private val theme: Theme, radi
         setTextColor(theme.keyTextColor)
     }
 
+    val imageView = imageView {
+        scaleType = ImageView.ScaleType.CENTER_CROP
+        adjustViewBounds = true
+        maxHeight = dp(120)
+        visibility = View.GONE
+    }
+
     val pin = imageView {
         imageDrawable = drawable(R.drawable.ic_baseline_push_pin_24)!!.apply {
             setTint(theme.altKeyTextColor)
@@ -53,6 +61,9 @@ class ClipboardEntryUi(override val ctx: Context, private val theme: Theme, radi
         add(textView, lParams(matchParent, wrapContent) {
             centerVertically()
         })
+        add(imageView, lParams(matchParent, wrapContent) {
+            centerVertically()
+        })
         add(pin, lParams(dp(12), dp(12)) {
             bottomOfParent(dp(2))
             endOfParent(dp(2))
@@ -62,6 +73,7 @@ class ClipboardEntryUi(override val ctx: Context, private val theme: Theme, radi
     override val root = CustomGestureView(ctx).apply {
         isClickable = true
         minimumHeight = dp(30)
+        clipToOutline = true
         foreground = RippleDrawable(
             ColorStateList.valueOf(theme.keyPressHighlightColor), null,
             GradientDrawable().apply {
@@ -76,8 +88,17 @@ class ClipboardEntryUi(override val ctx: Context, private val theme: Theme, radi
         add(layout, lParams(matchParent, matchParent))
     }
 
-    fun setEntry(text: String, pinned: Boolean) {
-        textView.text = text
+    fun setEntry(text: String, imagePath: String?, pinned: Boolean) {
+        if (!imagePath.isNullOrEmpty()) {
+            textView.visibility = View.GONE
+            imageView.visibility = View.VISIBLE
+        } else {
+            imageView.visibility = View.GONE
+            textView.visibility = View.VISIBLE
+            textView.text = text
+        }
         pin.visibility = if (pinned) View.VISIBLE else View.GONE
     }
+
+    fun setEntry(text: String, pinned: Boolean) = setEntry(text, null, pinned)
 }

@@ -321,4 +321,10 @@
     <string name="keyboard_height_percent_base">Keyboard height percent base</string>
     <string name="display_metrics">Display metrics (Resources.getDisplayMetrics)</string>
     <string name="real_size">Real size (Display.getRealSize)</string>
+    <string name="toolbar_emoji_key">Emoji on toolbar</string>
+    <string name="toolbar_emoji_key_summary">Show Emoji button on toolbar and replace comma/emoji key on keyboard with syllable separator (\')</string>
+    <string name="copy">Copy</string>
+    <string name="copied_to_clipboard">Copied to clipboard</string>
+    <string name="cannot_paste_image">Target field does not support pasting images</string>
+    <string name="clipboard_image_preview">[Image]</string>
 </resources>

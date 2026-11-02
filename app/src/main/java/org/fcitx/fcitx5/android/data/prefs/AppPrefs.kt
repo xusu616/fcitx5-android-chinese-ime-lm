@@ -358,6 +358,13 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
     }
 
     inner class Symbols : ManagedPreferenceCategory(R.string.emoji_and_symbols, sharedPreferences) {
+        val toolbarEmojiKey = switch(
+            R.string.toolbar_emoji_key,
+            "toolbar_emoji_key",
+            true,
+            R.string.toolbar_emoji_key_summary
+        )
+
         val hideUnsupportedEmojis = switch(
             R.string.hide_unsupported_emojis,
             "hide_unsupported_emojis",

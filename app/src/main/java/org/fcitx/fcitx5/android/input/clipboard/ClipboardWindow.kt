@@ -5,12 +5,14 @@
 package org.fcitx.fcitx5.android.input.clipboard
 
 import android.annotation.SuppressLint
+import android.content.ClipData
 import android.content.Intent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.PopupMenu
 import androidx.annotation.Keep
+import androidx.core.content.FileProvider
 import androidx.core.text.bold
 import androidx.core.text.buildSpannedString
 import androidx.core.text.color
@@ -47,11 +49,15 @@ import org.fcitx.fcitx5.android.input.wm.InputWindow
 import org.fcitx.fcitx5.android.input.wm.InputWindowManager
 import org.fcitx.fcitx5.android.utils.AppUtil
 import org.fcitx.fcitx5.android.utils.EventStateMachine
+import org.fcitx.fcitx5.android.utils.clipboardManager
 import org.fcitx.fcitx5.android.utils.item
+import org.fcitx.fcitx5.android.utils.toast
 import org.mechdancer.dependency.manager.must
 import splitties.dimensions.dp
 import splitties.resources.styledColor
 import splitties.views.dsl.core.withTheme
+import timber.log.Timber
+import java.io.File
 
 class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
 
@@ -104,10 +110,36 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
                 AppUtil.launchClipboardEdit(context, id)
             }
 
+            override fun onCopy(entry: ClipboardEntry) {
+                if (!entry.imagePath.isNullOrEmpty()) {
+                    try {
+                        val file = File(entry.imagePath)
+                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.clipboard.fileprovider", file)
+                        val clipData = ClipData.newUri(context.contentResolver, "Image", uri)
+                        context.clipboardManager.setPrimaryClip(clipData)
+                        context.toast(R.string.copied_to_clipboard)
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to copy image to clipboard")
+                    }
+                } else {
+                    val clipData = ClipData.newPlainText(null, entry.text)
+                    context.clipboardManager.setPrimaryClip(clipData)
+                    context.toast(R.string.copied_to_clipboard)
+                }
+            }
+
             override fun onShare(entry: ClipboardEntry) {
                 val target = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, entry.text)
+                    if (!entry.imagePath.isNullOrEmpty()) {
+                        val file = File(entry.imagePath)
+                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.clipboard.fileprovider", file)
+                        type = entry.type.ifEmpty { "image/png" }
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } else {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, entry.text)
+                    }
                 }
                 val chooser = Intent.createChooser(target, null).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -123,7 +155,14 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
             }
 
             override fun onPaste(entry: ClipboardEntry) {
-                service.commitText(entry.text)
+                if (!entry.imagePath.isNullOrEmpty()) {
+                    val success = service.commitImage(entry)
+                    if (!success) {
+                        context.toast(R.string.cannot_paste_image)
+                    }
+                } else {
+                    service.commitText(entry.text)
+                }
                 if (clipboardReturnAfterPaste) windowManager.attachWindow(KeyboardWindow)
             }
         }

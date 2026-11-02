@@ -4,12 +4,18 @@
  */
 package org.fcitx.fcitx5.android.input.clipboard
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.view.ViewGroup
 import android.widget.PopupMenu
 import androidx.paging.PagingDataAdapter
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardEntry
 import org.fcitx.fcitx5.android.data.theme.Theme
@@ -88,10 +94,49 @@ abstract class ClipboardAdapter(
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder =
         ViewHolder(ClipboardEntryUi(parent.context, theme, entryRadius))
 
+    private fun decodeSampledBitmap(path: String, reqWidth: Int = 300, reqHeight: Int = 300): Bitmap? {
+        return try {
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeFile(path, options)
+            var inSampleSize = 1
+            if (options.outHeight > reqHeight || options.outWidth > reqWidth) {
+                val halfHeight = options.outHeight / 2
+                val halfWidth = options.outWidth / 2
+                while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                    inSampleSize *= 2
+                }
+            }
+            options.inSampleSize = inSampleSize
+            options.inJustDecodeBounds = false
+            options.inPreferredConfig = Bitmap.Config.RGB_565
+            BitmapFactory.decodeFile(path, options)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val entry = getItem(position) ?: return
         with(holder.entryUi) {
-            setEntry(excerptText(entry.text, entry.sensitive && maskSensitive), entry.pinned)
+            setEntry(excerptText(entry.text, entry.sensitive && maskSensitive), entry.imagePath, entry.pinned)
+            if (!entry.imagePath.isNullOrEmpty()) {
+                val path = entry.imagePath
+                imageView.tag = path
+                imageView.setImageDrawable(null)
+                CoroutineScope(Dispatchers.IO).launch {
+                    val bmp = decodeSampledBitmap(path)
+                    withContext(Dispatchers.Main) {
+                        if (imageView.tag == path) {
+                            imageView.setImageBitmap(bmp)
+                        }
+                    }
+                }
+            } else {
+                imageView.tag = null
+                imageView.setImageDrawable(null)
+            }
             root.setOnClickListener {
                 onPaste(entry)
             }
@@ -108,8 +153,13 @@ abstract class ClipboardAdapter(
                         onPin(entry.id)
                     }
                 }
-                menu.item(R.string.edit, R.drawable.ic_baseline_edit_24, iconTint) {
-                    onEdit(entry.id)
+                menu.item(R.string.copy, R.drawable.ic_baseline_content_copy_24, iconTint) {
+                    onCopy(entry)
+                }
+                if (entry.imagePath.isNullOrEmpty()) {
+                    menu.item(R.string.edit, R.drawable.ic_baseline_edit_24, iconTint) {
+                        onEdit(entry.id)
+                    }
                 }
                 menu.item(R.string.share, R.drawable.ic_baseline_share_24, iconTint) {
                     onShare(entry)
@@ -139,6 +189,8 @@ abstract class ClipboardAdapter(
     }
 
     abstract fun onPaste(entry: ClipboardEntry)
+
+    open fun onCopy(entry: ClipboardEntry) {}
 
     abstract fun onPin(id: Int)
 

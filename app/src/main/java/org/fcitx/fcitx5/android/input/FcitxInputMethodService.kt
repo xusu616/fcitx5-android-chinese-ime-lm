@@ -7,6 +7,7 @@ package org.fcitx.fcitx5.android.input
 
 import android.annotation.SuppressLint
 import android.app.Dialog
+import android.content.ClipDescription
 import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -38,6 +39,10 @@ import androidx.autofill.inline.common.ImageViewStyle
 import androidx.autofill.inline.common.TextViewStyle
 import androidx.autofill.inline.common.ViewStyle
 import androidx.autofill.inline.v1.InlineSuggestionUi
+import androidx.core.content.FileProvider
+import androidx.core.view.inputmethod.EditorInfoCompat
+import androidx.core.view.inputmethod.InputConnectionCompat
+import androidx.core.view.inputmethod.InputContentInfoCompat
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineStart
@@ -48,6 +53,8 @@ import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.CapabilityFlags
 import org.fcitx.fcitx5.android.core.FcitxAPI
+import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardEntry
+import java.io.File
 import org.fcitx.fcitx5.android.core.FcitxEvent
 import org.fcitx.fcitx5.android.core.FcitxKeyMapping
 import org.fcitx.fcitx5.android.core.FormattedText
@@ -449,6 +456,33 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                 commitText(text, 1)
                 setSelection(target, target)
             }
+        }
+    }
+
+    fun commitImage(entry: ClipboardEntry): Boolean {
+        val imagePath = entry.imagePath ?: return false
+        val file = File(imagePath)
+        if (!file.exists()) return false
+        val ic = currentInputConnection ?: return false
+        val editorInfo = currentInputEditorInfo ?: return false
+
+        val mimeType = entry.type.ifEmpty { "image/png" }
+        val contentMimeTypes = EditorInfoCompat.getContentMimeTypes(editorInfo)
+        val canAccept = contentMimeTypes.any { ClipDescription.compareMimeTypes(it, mimeType) }
+        if (!canAccept) {
+            return false
+        }
+
+        return try {
+            val authority = "$packageName.clipboard.fileprovider"
+            val contentUri = FileProvider.getUriForFile(this, authority, file)
+            val description = ClipDescription(file.name, arrayOf(mimeType))
+            val inputContentInfo = InputContentInfoCompat(contentUri, description, null)
+            val flags = InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION
+            InputConnectionCompat.commitContent(ic, editorInfo, inputContentInfo, flags, null)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to commit image content")
+            false
         }
     }
 

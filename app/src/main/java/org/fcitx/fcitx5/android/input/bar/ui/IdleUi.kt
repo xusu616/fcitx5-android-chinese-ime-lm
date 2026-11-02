@@ -64,9 +64,20 @@ class IdleUi(
         if (ctx.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_LTR) 1f else -1f
     }
 
+    var toolbarEmojiMode: Boolean = false
+        private set
+
+    fun setToolbarEmojiMode(enabled: Boolean) {
+        if (toolbarEmojiMode == enabled) return
+        toolbarEmojiMode = enabled
+        updateMenuButtonIcon()
+        updateMenuButtonContentDescription()
+        updateMenuButtonRotation(instant = true)
+    }
+
     private val menuButtonRotation
         get() = when {
-            inPrivate -> 0f
+            inPrivate || toolbarEmojiMode -> 0f
             currentState == State.Toolbar -> 90f * translateDirection
             else -> -90f * translateDirection
         }
@@ -145,14 +156,18 @@ class IdleUi(
 
     private fun updateMenuButtonIcon() {
         menuButton.setIcon(
-            if (inPrivate) R.drawable.ic_view_private
-            else R.drawable.ic_baseline_expand_more_24
+            when {
+                inPrivate -> R.drawable.ic_view_private
+                toolbarEmojiMode -> R.drawable.ic_baseline_tag_faces_24
+                else -> R.drawable.ic_baseline_expand_more_24
+            }
         )
     }
 
     private fun updateMenuButtonContentDescription() {
         menuButton.contentDescription = when {
             inPrivate -> ctx.getString(R.string.private_mode)
+            toolbarEmojiMode -> "Emoji"
             currentState == State.Toolbar -> ctx.getString(R.string.hide_toolbar)
             else -> ctx.getString(R.string.expand_toolbar)
         }

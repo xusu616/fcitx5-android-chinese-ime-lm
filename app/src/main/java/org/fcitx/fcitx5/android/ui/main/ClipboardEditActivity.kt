@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -21,6 +22,7 @@ import org.fcitx.fcitx5.android.databinding.ActivityClipboardEditBinding
 import org.fcitx.fcitx5.android.utils.clipboardManager
 import org.fcitx.fcitx5.android.utils.inputMethodManager
 import org.fcitx.fcitx5.android.utils.str
+import java.io.File
 
 class ClipboardEditActivity : Activity() {
 
@@ -29,6 +31,7 @@ class ClipboardEditActivity : Activity() {
     private lateinit var editText: EditText
 
     private var entryId: Int = -1
+    private var currentEntry: ClipboardEntry? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,6 +52,19 @@ class ClipboardEditActivity : Activity() {
         scope.launch {
             ClipboardManager.updateText(entryId, str)
             if (copy) {
+                currentEntry?.imagePath?.let { path ->
+                    try {
+                        val file = File(path)
+                        val uri = FileProvider.getUriForFile(
+                            this@ClipboardEditActivity,
+                            "$packageName.clipboard.fileprovider",
+                            file
+                        )
+                        val clipData = ClipData.newUri(contentResolver, "Image", uri)
+                        clipboardManager.setPrimaryClip(clipData)
+                        return@launch
+                    } catch (_: Exception) {}
+                }
                 clipboardManager.setPrimaryClip(ClipData.newPlainText("", str))
             }
         }
@@ -56,6 +72,7 @@ class ClipboardEditActivity : Activity() {
     }
 
     private fun setEntry(entry: ClipboardEntry) {
+        currentEntry = entry
         entryId = entry.id
         editText.setText(entry.text)
     }

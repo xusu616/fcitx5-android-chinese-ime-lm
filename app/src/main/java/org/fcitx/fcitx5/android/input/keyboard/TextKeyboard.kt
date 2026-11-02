@@ -22,15 +22,16 @@ import splitties.views.imageResource
 @SuppressLint("ViewConstructor")
 class TextKeyboard(
     context: Context,
-    theme: Theme
-) : BaseKeyboard(context, theme, Layout) {
+    theme: Theme,
+    keyLayout: List<List<KeyDef>> = createLayout(AppPrefs.getInstance().symbols.toolbarEmojiKey.getValue())
+) : BaseKeyboard(context, theme, keyLayout) {
 
     enum class CapsState { None, Once, Lock }
 
     companion object {
         const val Name = "Text"
 
-        val Layout: List<List<KeyDef>> = listOf(
+        fun createLayout(toolbarEmojiKey: Boolean): List<List<KeyDef>> = listOf(
             listOf(
                 AlphabetKey("Q", "1"),
                 AlphabetKey("W", "2"),
@@ -67,13 +68,17 @@ class TextKeyboard(
             ),
             listOf(
                 LayoutSwitchKey("?123", ""),
-                CommaKey(0.1f, KeyDef.Appearance.Variant.Alternative),
+                if (toolbarEmojiKey) SeparatorKey(0.1f, KeyDef.Appearance.Variant.Alternative)
+                else CommaKey(0.1f, KeyDef.Appearance.Variant.Alternative),
                 LanguageKey(),
                 SpaceKey(),
                 SymbolKey(".", 0.1f, KeyDef.Appearance.Variant.Alternative),
                 ReturnKey()
             )
         )
+
+        val Layout: List<List<KeyDef>>
+            get() = createLayout(AppPrefs.getInstance().symbols.toolbarEmojiKey.getValue())
     }
 
     val caps: ImageKeyView by lazy { findViewById(R.id.button_caps) }
