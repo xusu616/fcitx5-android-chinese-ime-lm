@@ -64,6 +64,10 @@ inline std::vector<uint8_t> contextualPhraseFacts(
     const auto leader = contextual_ranking_detail::dictionaryPhrase(candidates.front());
     if (!leader || leader->start() != segmentStart || leader->end() != inputEnd ||
         leader->code().empty()) return {};
+    // A leader from the user dictionary is what the user chose before; Rime
+    // already learned and ranked it. Re-ranking it with the model would make
+    // repeated selection of the same word never stick (避免 + 写 stayed second).
+    if (leader->type() == "user_phrase") return {};
     const auto leaderSpans = leader->spans();
     if (leaderSpans.Count() != leader->code().size() ||
         leaderSpans.start() != segmentStart || leaderSpans.end() != inputEnd) return {};

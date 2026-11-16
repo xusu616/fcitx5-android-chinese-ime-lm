@@ -322,4 +322,16 @@
     <string name="copied_to_clipboard">已複製到剪貼簿</string>
     <string name="cannot_paste_image">目前輸入框不支援貼上圖片</string>
     <string name="clipboard_image_preview">[圖片]</string>
+    <string name="auto_delete_pasted_screenshot">自動刪除已貼上的截圖</string>
+    <string name="auto_delete_pasted_screenshot_summary">貼上螢幕截圖後自動從系統相簿中刪除原圖（剪貼簿內仍會保留）</string>
+    <string name="strict_delete_pasted_screenshot">嚴格刪除已貼上的截圖</string>
+    <string name="strict_delete_pasted_screenshot_summary">只要圖片被嘗試貼上（無論從何處觸發或是否成功），即從系統相簿中刪除原圖（剪貼簿內仍會保留）</string>
+    <string name="media_images_permission_title">媒體圖片讀取權限</string>
+    <string name="media_images_permission_message">授予讀取圖片權限後，輸入法可自動識別新擷取的螢幕截圖並加入剪貼簿</string>
+    <string name="manage_media_permission_title">靜默刪除截圖權限</string>
+    <string name="manage_media_permission_message">授予「媒體管理」權限後，貼上截圖時可直接從系統相簿靜默刪除原圖，無需每次彈窗確認</string>
+    <string name="clipboard_media_permission">截圖媒體權限</string>
+    <string name="clipboard_media_permission_granted">已授權（支援識別與靜默刪除）</string>
+    <string name="clipboard_media_permission_read_only">已允許讀取（刪除時將彈窗確認）</string>
+    <string name="clipboard_media_permission_denied">未授權（無法識別新截圖）</string>
 </resources>

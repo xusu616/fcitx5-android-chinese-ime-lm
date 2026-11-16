@@ -196,36 +196,20 @@ class SeparatorKey(
     percentWidth: Float = 0.1f,
     variant: Variant = Variant.Alternative
 ) : KeyDef(
-    Appearance.Text(
+    Appearance.AltText(
         displayText = "'",
+        altText = ",",
         textSize = 23f,
         percentWidth = percentWidth,
         variant = variant
     ),
     setOf(
-        Behavior.Press(KeyAction.FcitxKeyAction("'"))
+        Behavior.Press(KeyAction.FcitxKeyAction("'")),
+        Behavior.LongPress(KeyAction.FcitxKeyAction(",")),
+        Behavior.Swipe(KeyAction.FcitxKeyAction(","))
     ),
     arrayOf(
-        Popup.Preview("'"),
-        Popup.Menu(
-            arrayOf(
-                Popup.Menu.Item(
-                    ",",
-                    R.drawable.ic_baseline_edit_24,
-                    KeyAction.FcitxKeyAction(",")
-                ),
-                Popup.Menu.Item(
-                    "QuickPhrase",
-                    R.drawable.ic_baseline_format_quote_24,
-                    KeyAction.QuickPhraseAction
-                ),
-                Popup.Menu.Item(
-                    "Unicode",
-                    R.drawable.ic_logo_unicode,
-                    KeyAction.UnicodeAction
-                )
-            )
-        )
+        Popup.AltPreview("'", ",")
     )
 )
 

@@ -44,6 +44,15 @@ interface ClipboardDao {
     @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE ((:imagePath IS NULL AND imagePath IS NULL AND text=:text) OR (:imagePath IS NOT NULL AND imagePath=:imagePath)) AND sensitive=:sensitive AND deleted=0 LIMIT 1")
     suspend fun find(text: String, imagePath: String? = null, sensitive: Boolean = false): ClipboardEntry?
 
+    @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE sourceUri=:sourceUri AND deleted=0 LIMIT 1")
+    suspend fun findBySourceUri(sourceUri: String): ClipboardEntry?
+
+    @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE imagePath=:imagePath AND deleted=0 LIMIT 1")
+    suspend fun findByImagePath(imagePath: String): ClipboardEntry?
+
+    @Query("UPDATE ${ClipboardEntry.TABLE_NAME} SET sourceUri=NULL WHERE id=:id")
+    suspend fun clearSourceUri(id: Int)
+
     @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE deleted=1")
     suspend fun getDeleted(): List<ClipboardEntry>
 

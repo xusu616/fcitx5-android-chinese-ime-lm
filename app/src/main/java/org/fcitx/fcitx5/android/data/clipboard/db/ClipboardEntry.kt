@@ -29,7 +29,9 @@ data class ClipboardEntry(
     @ColumnInfo(defaultValue = "0")
     val sensitive: Boolean = false,
     @ColumnInfo(defaultValue = "NULL")
-    val imagePath: String? = null
+    val imagePath: String? = null,
+    @ColumnInfo(defaultValue = "NULL")
+    val sourceUri: String? = null
 ) {
     companion object {
         const val BULLET = "•"
@@ -54,21 +56,36 @@ data class ClipboardEntry(
                 false
             }
 
+            val resolvedUriMime = item.uri?.let {
+                try {
+                    appContext.contentResolver.getType(it)
+                } catch (_: Exception) {
+                    null
+                }
+            }
             val isImage = (0 until desc.mimeTypeCount).any {
                 ClipDescription.compareMimeTypes(desc.getMimeType(it), "image/*")
-            }
+            } || (resolvedUriMime?.startsWith("image/") == true)
             if (isImage && item.uri != null) {
                 val mimeType = (0 until desc.mimeTypeCount)
                     .map { desc.getMimeType(it) }
-                    .firstOrNull { it.startsWith("image/") } ?: "image/png"
+                    .firstOrNull { it.startsWith("image/") && it != "image/*" }
+                    ?: resolvedUriMime?.takeIf { it.startsWith("image/") }
+                    ?: "image/png"
                 val file = ClipboardManager.saveImageToLocal(appContext, item.uri, mimeType)
                 if (file != null) {
+                    val sourceUri = if (ClipboardManager.isScreenshotUri(appContext, item.uri)) {
+                        item.uri.toString()
+                    } else {
+                        null
+                    }
                     return ClipboardEntry(
                         text = item.text?.toString() ?: "",
                         imagePath = file.absolutePath,
                         timestamp = clipData.timestamp(),
                         type = mimeType,
-                        sensitive = sensitive
+                        sensitive = sensitive,
+                        sourceUri = sourceUri
                     )
                 }
             }

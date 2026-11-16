@@ -36,6 +36,8 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         val pid = int("pid", 0)
         val editorInfoInspector = bool("editor_info_inspector", false)
         val needNotifications = bool("need_notifications", true)
+        val needMediaImages = bool("need_media_images", true)
+        val needManageMedia = bool("need_manage_media", true)
     }
 
     inner class Advanced : ManagedPreferenceCategory(R.string.advanced, sharedPreferences) {
@@ -354,6 +356,18 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         ) { clipboardListening.getValue() }
         val clipboardMaskSensitive = switch(
             R.string.clipboard_mask_sensitive, "clipboard_mask_sensitive", true
+        ) { clipboardListening.getValue() }
+        val autoDeletePastedScreenshot = switch(
+            R.string.auto_delete_pasted_screenshot,
+            "clipboard_auto_delete_pasted_screenshot",
+            true,
+            R.string.auto_delete_pasted_screenshot_summary
+        ) { clipboardListening.getValue() }
+        val strictDeletePastedScreenshot = switch(
+            R.string.strict_delete_pasted_screenshot,
+            "clipboard_strict_delete_pasted_screenshot",
+            false,
+            R.string.strict_delete_pasted_screenshot_summary
         ) { clipboardListening.getValue() }
     }
 

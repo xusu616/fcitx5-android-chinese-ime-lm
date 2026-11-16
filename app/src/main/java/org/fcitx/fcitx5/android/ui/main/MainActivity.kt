@@ -7,8 +7,11 @@ package org.fcitx.fcitx5.android.ui.main
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
+import android.provider.Settings
 import android.view.ViewGroup
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -23,6 +26,7 @@ import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.fragment.NavHostFragment
 import org.fcitx.fcitx5.android.BuildConfig
 import org.fcitx.fcitx5.android.R
+import org.fcitx.fcitx5.android.data.clipboard.ClipboardManager
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.databinding.ActivityMainBinding
 import org.fcitx.fcitx5.android.ui.main.settings.SettingsRoute
@@ -75,6 +79,7 @@ class MainActivity : AppCompatActivity() {
         }
         processIntent(intent)
         checkNotificationPermission()
+        checkMediaPermissions()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -118,6 +123,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var needNotifications by AppPrefs.getInstance().internal.needNotifications
+    private var needMediaImages by AppPrefs.getInstance().internal.needMediaImages
+    private var needManageMedia by AppPrefs.getInstance().internal.needManageMedia
 
     private fun checkNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -144,15 +151,79 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun checkMediaPermissions() {
+        val clipboardPrefs = AppPrefs.getInstance().clipboard
+        if (!clipboardPrefs.clipboardListening.getValue()) return
+        if (!ClipboardManager.hasMediaReadPermission(this)) {
+            if (!needMediaImages) return
+            val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Manifest.permission.READ_MEDIA_IMAGES
+            } else {
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            }
+            AlertDialog.Builder(this)
+                .setIconAttribute(android.R.attr.alertDialogIcon)
+                .setTitle(R.string.media_images_permission_title)
+                .setMessage(R.string.media_images_permission_message)
+                .setNegativeButton(R.string.i_do_not_need_it) { _, _ ->
+                    needMediaImages = false
+                }
+                .setPositiveButton(R.string.grant_permission) { _, _ ->
+                    requestPermissions(arrayOf(perm), 1)
+                }
+                .show()
+            return
+        }
+        checkManageMediaPermission()
+    }
+
+    private fun checkManageMediaPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val clipboardPrefs = AppPrefs.getInstance().clipboard
+        if (!clipboardPrefs.autoDeletePastedScreenshot.getValue() &&
+            !clipboardPrefs.strictDeletePastedScreenshot.getValue()
+        ) return
+        if (MediaStore.canManageMedia(this)) {
+            needManageMedia = true
+            return
+        }
+        if (!needManageMedia) return
+        AlertDialog.Builder(this)
+            .setIconAttribute(android.R.attr.alertDialogIcon)
+            .setTitle(R.string.manage_media_permission_title)
+            .setMessage(R.string.manage_media_permission_message)
+            .setNegativeButton(R.string.i_do_not_need_it) { _, _ ->
+                needManageMedia = false
+            }
+            .setPositiveButton(R.string.grant_permission) { _, _ ->
+                try {
+                    startActivity(
+                        Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                    )
+                } catch (_: Exception) {
+                }
+            }
+            .show()
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != 0) return
-        // do not ask again if user denied the request
-        needNotifications = grantResults.getOrNull(0) == PackageManager.PERMISSION_GRANTED
+        when (requestCode) {
+            0 -> needNotifications = grantResults.getOrNull(0) == PackageManager.PERMISSION_GRANTED
+            1 -> {
+                val granted = grantResults.getOrNull(0) == PackageManager.PERMISSION_GRANTED
+                needMediaImages = granted
+                if (granted) {
+                    checkManageMediaPermission()
+                }
+            }
+        }
     }
 
     override fun onStop() {

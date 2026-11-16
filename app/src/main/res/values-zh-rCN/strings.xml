@@ -327,4 +327,16 @@
     <string name="copied_to_clipboard">已复制到剪贴板</string>
     <string name="cannot_paste_image">当前输入框不支持粘贴图片</string>
     <string name="clipboard_image_preview">[图片]</string>
+    <string name="auto_delete_pasted_screenshot">自动删除已粘贴的截图</string>
+    <string name="auto_delete_pasted_screenshot_summary">粘贴屏幕截图后自动从系统相册中删除原图（剪贴板内仍会保留）</string>
+    <string name="strict_delete_pasted_screenshot">严格删除已粘贴的截图</string>
+    <string name="strict_delete_pasted_screenshot_summary">只要图片被尝试粘贴（无论从何处触发或是否成功），即从系统相册中删除原图（剪贴板内仍会保留）</string>
+    <string name="media_images_permission_title">媒体图片读取权限</string>
+    <string name="media_images_permission_message">授予读取图片权限后，输入法可自动识别新捕获的屏幕截图并加入剪贴板</string>
+    <string name="manage_media_permission_title">静默删除截图权限</string>
+    <string name="manage_media_permission_message">授予“媒体管理”权限后，粘贴截图时可直接从系统相册静默删除原图，无需每次弹窗确认</string>
+    <string name="clipboard_media_permission">截图媒体权限</string>
+    <string name="clipboard_media_permission_granted">已授权（支持识别与静默删除）</string>
+    <string name="clipboard_media_permission_read_only">已允许读取（删除时将弹窗确认）</string>
+    <string name="clipboard_media_permission_denied">未授权（无法识别新截图）</string>
 </resources>

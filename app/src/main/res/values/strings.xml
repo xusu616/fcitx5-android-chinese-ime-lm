@@ -327,4 +327,16 @@
     <string name="copied_to_clipboard">Copied to clipboard</string>
     <string name="cannot_paste_image">Target field does not support pasting images</string>
     <string name="clipboard_image_preview">[Image]</string>
+    <string name="auto_delete_pasted_screenshot">Auto-delete pasted screenshots</string>
+    <string name="auto_delete_pasted_screenshot_summary">Delete original screenshot from device gallery after pasting (keeps copy in clipboard)</string>
+    <string name="strict_delete_pasted_screenshot">Strictly delete pasted screenshots</string>
+    <string name="strict_delete_pasted_screenshot_summary">Delete original screenshot from device gallery whenever pasting is attempted, regardless of trigger or result (keeps copy in clipboard)</string>
+    <string name="media_images_permission_title">Media access permission</string>
+    <string name="media_images_permission_message">Allow reading photos and images so the keyboard can detect new screenshots in clipboard</string>
+    <string name="manage_media_permission_title">Silent screenshot deletion</string>
+    <string name="manage_media_permission_message">Allow managing media so pasted screenshots can be deleted from your gallery without a confirmation prompt each time</string>
+    <string name="clipboard_media_permission">Media permissions for screenshots</string>
+    <string name="clipboard_media_permission_granted">Granted (silent deletion enabled)</string>
+    <string name="clipboard_media_permission_read_only">Read granted (system prompt on delete)</string>
+    <string name="clipboard_media_permission_denied">Not granted (screenshot detection disabled)</string>
 </resources>

@@ -21,4 +21,22 @@ int main() {
     assert(chinese_ime_lm::contextualBest(
         {-8.06628f, -7.02540f, -7.79635f, -5.40801f, -6.39396f},
         bianyPrior, {1, 1, 1, 1, 1}) == 0);
+    // Measured: 避免 + xie, dictionary order [写, 协, 些, 血]. Single characters are
+    // scored only by P(char | context); the 4M weights rank 些 above 写 here, and
+    // the fine-tuned test weights rank 协 above it. Neither may displace 写.
+    const std::vector<float> xiePrior{-8.06539f, -9.56922f, -9.14687f, -9.09443f};
+    const std::vector<float> xieBase{-9.65381f, -8.56163f, -7.60871f, -8.3547f};
+    assert(chinese_ime_lm::contextualBest(xieBase, xiePrior, {1, 1, 1, 1}) == 2);  // old behaviour
+    assert(chinese_ime_lm::contextualBest(xieBase, xiePrior, {1, 1, 1, 1}, true) == 0);
+    const std::vector<float> xieFtPrior{-9.03529f, -9.64827f, -10.8342f, -10.97835f};
+    const std::vector<float> xieFt{-8.20233f, -7.89935f, -7.95265f, -8.57148f};
+    assert(chinese_ime_lm::contextualBest(xieFt, xieFtPrior, {1, 1, 1, 1}, true) == 0);
+    // A clear single-character correction still works: 还 + shi, [事, 是].
+    assert(chinese_ime_lm::contextualBest({-10.14879f, -1.20265f},
+        {-7.65448f, -4.54934f}, {1, 1}, true) == 1);
+    const std::vector<const char *> one{"\xE5\x86\x99", "\xE5\x8D\x8F"};
+    const std::vector<const char *> mixed{"\xE5\x86\x99", "\xE7\xBC\x96\xE8\xAF\x91"};
+    assert(chinese_ime_lm::allSingleCharacters(one));
+    assert(!chinese_ime_lm::allSingleCharacters(mixed));
+    assert(!chinese_ime_lm::allSingleCharacters({}));
 }

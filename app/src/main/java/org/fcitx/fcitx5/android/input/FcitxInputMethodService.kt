@@ -8,9 +8,12 @@ package org.fcitx.fcitx5.android.input
 import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.ClipDescription
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.Icon
 import android.os.Build
@@ -53,6 +56,7 @@ import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.CapabilityFlags
 import org.fcitx.fcitx5.android.core.FcitxAPI
+import org.fcitx.fcitx5.android.data.clipboard.ClipboardManager
 import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardEntry
 import java.io.File
 import org.fcitx.fcitx5.android.core.FcitxEvent
@@ -459,31 +463,96 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
     }
 
-    fun commitImage(entry: ClipboardEntry): Boolean {
-        val imagePath = entry.imagePath ?: return false
-        val file = File(imagePath)
-        if (!file.exists()) return false
-        val ic = currentInputConnection ?: return false
-        val editorInfo = currentInputEditorInfo ?: return false
+    private fun matchesContentMimeType(mimeType: String, accepted: Array<String>): Boolean {
+        if (accepted.any { ClipDescription.compareMimeTypes(mimeType, it) }) return true
+        if (mimeType == "image/jpeg" && accepted.any { ClipDescription.compareMimeTypes("image/jpg", it) }) return true
+        if (mimeType == "image/jpg" && accepted.any { ClipDescription.compareMimeTypes("image/jpeg", it) }) return true
+        return false
+    }
 
-        val mimeType = entry.type.ifEmpty { "image/png" }
-        val contentMimeTypes = EditorInfoCompat.getContentMimeTypes(editorInfo)
-        val canAccept = contentMimeTypes.any { ClipDescription.compareMimeTypes(it, mimeType) }
-        if (!canAccept) {
-            return false
+    private fun prepareCommitImage(
+        file: File,
+        originalMimeType: String,
+        accepted: Array<String>
+    ): Pair<File, String>? {
+        val normalized = if (originalMimeType == "image/jpg") "image/jpeg" else originalMimeType
+        if (matchesContentMimeType(normalized, accepted)) {
+            val outMime = if (normalized == "image/jpeg" && accepted.none { ClipDescription.compareMimeTypes("image/jpeg", it) }) {
+                "image/jpg"
+            } else {
+                normalized
+            }
+            return file to outMime
         }
 
+        val targetMime = when {
+            matchesContentMimeType("image/png", accepted) -> "image/png"
+            matchesContentMimeType("image/jpeg", accepted) -> "image/jpeg"
+            else -> return null
+        }
+
+        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return null
         return try {
+            val dir = cacheDir.resolve("clipboard_commit")
+            if (!dir.exists()) dir.mkdirs()
+            dir.listFiles()?.forEach { old ->
+                if (System.currentTimeMillis() - old.lastModified() > 60_000L) {
+                    old.delete()
+                }
+            }
+            val (ext, format) = if (targetMime == "image/jpeg") {
+                "jpg" to Bitmap.CompressFormat.JPEG
+            } else {
+                "png" to Bitmap.CompressFormat.PNG
+            }
+            val tmpFile = File(dir, "commit_${System.currentTimeMillis()}.$ext")
+            tmpFile.outputStream().use { out ->
+                bitmap.compress(format, 95, out)
+            }
+            if (tmpFile.exists() && tmpFile.length() > 0) tmpFile to targetMime else null
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    fun commitImage(entry: ClipboardEntry): Boolean {
+        var committed = false
+        try {
+            val imagePath = entry.imagePath ?: return false
+            val file = File(imagePath)
+            if (!file.exists()) return false
+            val ic = currentInputConnection ?: return false
+            val editorInfo = currentInputEditorInfo ?: return false
+
+            val mimeType = entry.type.ifEmpty { "image/png" }
+            val contentMimeTypes = EditorInfoCompat.getContentMimeTypes(editorInfo)
+            val (commitFile, commitMime) = prepareCommitImage(file, mimeType, contentMimeTypes) ?: return false
+
             val authority = "$packageName.clipboard.fileprovider"
-            val contentUri = FileProvider.getUriForFile(this, authority, file)
-            val description = ClipDescription(file.name, arrayOf(mimeType))
+            val contentUri = FileProvider.getUriForFile(this, authority, commitFile)
+            editorInfo.packageName?.takeIf { it.isNotEmpty() }?.let { targetPkg ->
+                try {
+                    grantUriPermission(targetPkg, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: Exception) {
+                }
+            }
+            val description = ClipDescription(commitFile.name, arrayOf(commitMime))
             val inputContentInfo = InputContentInfoCompat(contentUri, description, null)
             val flags = InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION
-            InputConnectionCompat.commitContent(ic, editorInfo, inputContentInfo, flags, null)
+            committed = InputConnectionCompat.commitContent(ic, editorInfo, inputContentInfo, flags, null)
+            return committed
         } catch (e: Exception) {
             Timber.w(e, "Failed to commit image content")
-            false
+            return false
+        } finally {
+            ClipboardManager.onImagePasted(this, entry, committed)
         }
+    }
+
+    fun performPaste(): Boolean {
+        val pasted = currentInputConnection?.performContextMenuAction(android.R.id.paste) == true
+        ClipboardManager.onSystemPasteAttempted(this)
+        return pasted
     }
 
     private fun sendDownKeyEvent(eventTime: Long, keyEventCode: Int, metaState: Int = 0) {
@@ -531,6 +600,9 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         ctrl: Boolean = false,
         shift: Boolean = false
     ) {
+        if (keyEventCode == KeyEvent.KEYCODE_PASTE || (keyEventCode == KeyEvent.KEYCODE_V && ctrl && !alt && !shift)) {
+            ClipboardManager.onSystemPasteAttempted(this)
+        }
         var metaState = 0
         if (alt) metaState = KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON
         if (ctrl) metaState = metaState or KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
@@ -679,6 +751,13 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (event.repeatCount == 0 && (
+                keyCode == KeyEvent.KEYCODE_PASTE ||
+                    (keyCode == KeyEvent.KEYCODE_V && event.isCtrlPressed && !event.isAltPressed && !event.isShiftPressed && !event.isMetaPressed)
+                )
+        ) {
+            ClipboardManager.onSystemPasteAttempted(this)
+        }
         // request to show floating CandidatesView when pressing physical keyboard
         if (inputDeviceMgr.evaluateOnKeyDown(event, this)) {
             postFcitxJob {

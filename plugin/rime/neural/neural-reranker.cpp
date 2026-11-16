@@ -231,7 +231,8 @@ public:
                     if (priorStatus == 0 && contextStatus == 0) {
                         const std::vector<uint8_t> scoringFacts(texts.size(), 1);
                         const size_t best = chinese_ime_lm::contextualBest(
-                            conditioned, unconditioned, scoringFacts);
+                            conditioned, unconditioned, scoringFacts,
+                            chinese_ime_lm::allSingleCharacters(texts));
                         selected = indices[best];
                     }
                     if (priorStatus != 0 || contextStatus != 0)
