@@ -23,4 +23,18 @@ internal object ScreenshotPolicy {
             pathOrRelative.contains("截屏") ||
             pathOrRelative.contains("截图")
     }
+
+    fun isMediaStoreAuthority(authority: String?): Boolean {
+        if (authority.isNullOrEmpty()) return false
+        if (authority == "media") return true
+        val at = authority.indexOf('@')
+        if (at <= 0) return false
+        return authority.substring(at + 1) == "media" &&
+            authority.substring(0, at).all { it in '0'..'9' }
+    }
+
+    fun parseMediaDocumentImageId(documentId: String?): Long? {
+        if (documentId.isNullOrEmpty() || !documentId.startsWith("image:")) return null
+        return documentId.substringAfter("image:").toLongOrNull()?.takeIf { it >= 0L }
+    }
 }

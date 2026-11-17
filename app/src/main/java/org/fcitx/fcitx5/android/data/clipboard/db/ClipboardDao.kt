@@ -29,6 +29,9 @@ interface ClipboardDao {
     @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE id=:id AND deleted=0 LIMIT 1")
     suspend fun get(id: Int): ClipboardEntry?
 
+    @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE id=:id LIMIT 1")
+    suspend fun getAny(id: Int): ClipboardEntry?
+
     @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE rowId=:rowId AND deleted=0 LIMIT 1")
     suspend fun get(rowId: Long): ClipboardEntry?
 
@@ -52,6 +55,9 @@ interface ClipboardDao {
 
     @Query("UPDATE ${ClipboardEntry.TABLE_NAME} SET sourceUri=NULL WHERE id=:id")
     suspend fun clearSourceUri(id: Int)
+
+    @Query("UPDATE ${ClipboardEntry.TABLE_NAME} SET sourceUri=NULL WHERE sourceUri=:sourceUri")
+    suspend fun clearSourceUriByUri(sourceUri: String)
 
     @Query("SELECT * FROM ${ClipboardEntry.TABLE_NAME} WHERE deleted=1")
     suspend fun getDeleted(): List<ClipboardEntry>

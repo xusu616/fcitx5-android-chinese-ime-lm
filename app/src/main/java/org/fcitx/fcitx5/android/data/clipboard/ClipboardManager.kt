@@ -10,7 +10,7 @@ import android.content.ClipboardManager
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
-import android.content.Intent
+import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.net.Uri
@@ -18,7 +18,9 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import androidx.annotation.Keep
 import androidx.room.Room
 import androidx.room.withTransaction
@@ -35,6 +37,7 @@ import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardDatabase
 import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardEntry
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.data.prefs.ManagedPreference
+import org.fcitx.fcitx5.android.ui.main.MediaDeleteRequestActivity
 import org.fcitx.fcitx5.android.utils.WeakHashSet
 import org.fcitx.fcitx5.android.utils.appContext
 import org.fcitx.fcitx5.android.utils.clipboardManager
@@ -170,6 +173,7 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
     }
 
     private val deletingUris = ConcurrentHashMap.newKeySet<String>()
+    private val pendingDeleteRequests = ConcurrentHashMap.newKeySet<String>()
 
     internal fun shouldDeleteMediaOnPaste(
         autoDelete: Boolean,
@@ -182,9 +186,117 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
 
     internal fun isMediaStoreUri(uri: Uri): Boolean {
         if (uri.scheme != ContentResolver.SCHEME_CONTENT) return false
-        if (uri.authority != MediaStore.AUTHORITY) return false
+        if (!ScreenshotPolicy.isMediaStoreAuthority(uri.authority)) return false
         val path = uri.path ?: return false
-        return path.contains("/images/")
+        return path.contains("/images/") || path.contains("/file/")
+    }
+
+    internal fun resolveMediaStoreImageUri(context: Context, uri: Uri): Uri? {
+        if (isMediaStoreUri(uri)) {
+            val path = uri.path ?: return null
+            if (path.contains("/file/")) {
+                val mime = try {
+                    context.contentResolver.getType(uri)
+                } catch (_: Exception) {
+                    null
+                }
+                if (mime?.startsWith("image/") != true) return null
+            }
+            val id = try {
+                ContentUris.parseId(uri)
+            } catch (_: Exception) {
+                -1L
+            }
+            if (id >= 0L && uri.authority == MediaStore.AUTHORITY) {
+                return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            }
+            return uri
+        }
+        if (uri.scheme == ContentResolver.SCHEME_CONTENT &&
+            uri.authority == "com.android.providers.media.documents" &&
+            DocumentsContract.isDocumentUri(context, uri)
+        ) {
+            val docId = try {
+                DocumentsContract.getDocumentId(uri)
+            } catch (_: Exception) {
+                null
+            }
+            val id = ScreenshotPolicy.parseMediaDocumentImageId(docId) ?: return null
+            return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+        }
+        return null
+    }
+
+    private fun queryOpenableNameAndSize(context: Context, uri: Uri): Pair<String?, Long?> {
+        var name: String? = null
+        var size: Long? = null
+        try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameCol = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameCol != -1) {
+                        name = cursor.getString(nameCol)?.takeIf { it.isNotEmpty() }
+                    }
+                    val sizeCol = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeCol != -1 && !cursor.isNull(sizeCol)) {
+                        size = cursor.getLong(sizeCol).takeIf { it > 0L }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        if (name.isNullOrEmpty()) {
+            name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
+        }
+        return name to size
+    }
+
+    internal fun findRecentScreenshotMediaUri(context: Context, clipUri: Uri): Uri? {
+        if (!hasMediaReadPermission(context)) return null
+        val (displayName, clipSize) = queryOpenableNameAndSize(context, clipUri)
+        if (displayName.isNullOrEmpty() || !isScreenshotNameOrPath(displayName, "")) return null
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.SIZE
+        )
+        val selection = "${MediaStore.Images.Media.DISPLAY_NAME} = ?"
+        val selectionArgs = arrayOf(displayName)
+        val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+        try {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                sortOrder
+            )?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val sizeCol = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
+                while (cursor.moveToNext()) {
+                    val rowSize = if (sizeCol != -1 && !cursor.isNull(sizeCol)) cursor.getLong(sizeCol) else -1L
+                    if (clipSize != null && rowSize > 0L && rowSize != clipSize) continue
+                    val id = cursor.getLong(idCol)
+                    return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to resolve screenshot MediaStore URI for $clipUri")
+        }
+        return null
+    }
+
+    @JvmStatic
+    fun resolveScreenshotSourceUri(context: Context, uri: Uri): String? {
+        val resolved = resolveMediaStoreImageUri(context, uri)
+            ?: findRecentScreenshotMediaUri(context, uri)
+            ?: return null
+        return if (isScreenshotUri(context, resolved)) resolved.toString() else null
     }
 
     internal fun resolveLocalFileProviderImagePath(context: Context, uri: Uri): String? {
@@ -201,7 +313,7 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
 
     @JvmStatic
     fun isScreenshotUri(context: Context, uri: Uri): Boolean {
-        if (!isMediaStoreUri(uri)) return false
+        val targetUri = resolveMediaStoreImageUri(context, uri) ?: return false
         val columns = mutableListOf(MediaStore.Images.Media.DISPLAY_NAME)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             columns.add(MediaStore.Images.Media.RELATIVE_PATH)
@@ -209,7 +321,7 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
             columns.add(MediaStore.Images.Media.DATA)
         }
         try {
-            context.contentResolver.query(uri, columns.toTypedArray(), null, null, null)?.use { cursor ->
+            context.contentResolver.query(targetUri, columns.toTypedArray(), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val nameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
                     val name = if (nameCol != -1) cursor.getString(nameCol) ?: "" else ""
@@ -224,7 +336,7 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
                 }
             }
         } catch (e: Exception) {
-            Timber.w(e, "Failed to query screenshot metadata for $uri")
+            Timber.w(e, "Failed to query screenshot metadata for $targetUri")
         }
         return false
     }
@@ -246,15 +358,40 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         }
     }
 
-    private suspend fun clearEntrySourceUri(entryId: Int) {
+    private suspend fun clearEntrySourceUri(entryId: Int, uriStr: String? = null) {
         if (entryId > 0) {
             clbDao.clearSourceUri(entryId)
         }
+        if (uriStr != null) {
+            clbDao.clearSourceUriByUri(uriStr)
+        }
         withContext(Dispatchers.Main.immediate) {
             lastEntry?.let {
-                if (it.id == entryId) {
+                if ((entryId > 0 && it.id == entryId) || (uriStr != null && it.sourceUri == uriStr)) {
                     lastEntry = it.copy(sourceUri = null)
                 }
+            }
+        }
+    }
+
+    internal fun acknowledgeDeleteRequest(requestId: String?) {
+        if (requestId != null) {
+            pendingDeleteRequests.remove(requestId)
+        }
+    }
+
+    internal fun onDeleteRequestResult(
+        context: Context,
+        uri: Uri,
+        entryId: Int,
+        strict: Boolean,
+        approved: Boolean
+    ) {
+        val uriStr = uri.toString()
+        deletingUris.remove(uriStr)
+        launch(Dispatchers.IO) {
+            if (approved || !mediaUriExists(context, uri) || !strict) {
+                clearEntrySourceUri(entryId, uriStr)
             }
         }
     }
@@ -266,8 +403,14 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         strict: Boolean
     ) {
         val effectiveUriStr = if (entryId > 0) {
-            val dbEntry = clbDao.get(entryId) ?: return
-            dbEntry.sourceUri ?: return
+            val dbEntry = clbDao.getAny(entryId)
+            if (dbEntry != null) {
+                dbEntry.sourceUri ?: return
+            } else if (strict) {
+                fallbackSourceUri
+            } else {
+                return
+            }
         } else {
             fallbackSourceUri
         }
@@ -280,68 +423,88 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         entryId: Int,
         strict: Boolean
     ) {
-        val uriStr = uri.toString()
+        val targetUri = resolveMediaStoreImageUri(context, uri) ?: uri
+        val uriStr = targetUri.toString()
         if (!deletingUris.add(uriStr)) return
+        var handedOffToActivity = false
         try {
-            if (!mediaUriExists(context, uri)) {
-                clearEntrySourceUri(entryId)
+            if (!mediaUriExists(context, targetUri)) {
+                clearEntrySourceUri(entryId, uriStr)
                 return
             }
+            var needDeleteRequest = false
+            var intentSender: IntentSender? = null
             try {
-                val deleted = context.contentResolver.delete(uri, null, null)
-                if (deleted > 0 || !mediaUriExists(context, uri)) {
-                    clearEntrySourceUri(entryId)
-                }
-            } catch (e: SecurityException) {
-                if (!mediaUriExists(context, uri)) {
-                    clearEntrySourceUri(entryId)
+                val deleted = context.contentResolver.delete(targetUri, null, null)
+                if (deleted > 0 || !mediaUriExists(context, targetUri)) {
+                    clearEntrySourceUri(entryId, uriStr)
                     return
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    withContext(Dispatchers.Main) {
-                        try {
-                            val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
-                            val fillInIntent = Intent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startIntentSender(
-                                pendingIntent.intentSender,
-                                fillInIntent,
-                                Intent.FLAG_ACTIVITY_NEW_TASK,
-                                Intent.FLAG_ACTIVITY_NEW_TASK,
-                                0
-                            )
-                            if (!strict) {
-                                launch { clearEntrySourceUri(entryId) }
-                            }
-                        } catch (ex: Exception) {
-                            Timber.w(ex, "Failed to launch MediaStore delete request for $uri")
-                        }
-                    }
+                    needDeleteRequest = true
+                }
+            } catch (e: SecurityException) {
+                if (!mediaUriExists(context, targetUri)) {
+                    clearEntrySourceUri(entryId, uriStr)
+                    return
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    needDeleteRequest = true
                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && e is RecoverableSecurityException) {
-                    withContext(Dispatchers.Main) {
-                        try {
-                            val fillInIntent = Intent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startIntentSender(
-                                e.userAction.actionIntent.intentSender,
-                                fillInIntent,
-                                Intent.FLAG_ACTIVITY_NEW_TASK,
-                                Intent.FLAG_ACTIVITY_NEW_TASK,
-                                0
-                            )
-                            if (!strict) {
-                                launch { clearEntrySourceUri(entryId) }
-                            }
-                        } catch (ex: Exception) {
-                            Timber.w(ex, "Failed to launch RecoverableSecurityException delete request for $uri")
-                        }
-                    }
+                    intentSender = e.userAction.actionIntent.intentSender
                 } else {
-                    Timber.w(e, "No permission to delete screenshot $uri")
+                    Timber.w(e, "No permission to delete screenshot $targetUri")
                 }
             } catch (e: Exception) {
-                Timber.w(e, "Failed to delete pasted screenshot $uri")
+                Timber.w(e, "Failed to delete pasted screenshot $targetUri")
+            }
+
+            if (needDeleteRequest && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    intentSender = MediaStore.createDeleteRequest(
+                        context.contentResolver,
+                        listOf(targetUri)
+                    ).intentSender
+                } catch (ex: Exception) {
+                    Timber.w(ex, "Failed to create MediaStore delete request for $targetUri")
+                }
+            }
+
+            val sender = intentSender ?: return
+            val requestId = UUID.randomUUID().toString()
+            pendingDeleteRequests.add(requestId)
+            val launched = withContext(Dispatchers.Main) {
+                try {
+                    MediaDeleteRequestActivity.launch(
+                        context,
+                        sender,
+                        targetUri,
+                        entryId,
+                        strict,
+                        requestId
+                    )
+                    true
+                } catch (ex: Exception) {
+                    Timber.w(ex, "Failed to launch MediaDeleteRequestActivity for $targetUri")
+                    false
+                }
+            }
+            if (launched) {
+                handedOffToActivity = true
+                // Guard against silent BAL drop where onCreate never runs
+                launch {
+                    delay(3_000L)
+                    if (pendingDeleteRequests.remove(requestId)) {
+                        deletingUris.remove(uriStr)
+                    }
+                }
+            } else {
+                pendingDeleteRequests.remove(requestId)
             }
         } finally {
-            deletingUris.remove(uriStr)
+            if (!handedOffToActivity) {
+                deletingUris.remove(uriStr)
+            }
         }
     }
 
@@ -375,17 +538,22 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
                         ?: lastEntry?.takeIf { it.imagePath == localPath }
                     val sourceUriStr = entry?.sourceUri ?: return@launch
                     deleteSourceMediaUri(context, entry.id, sourceUriStr, strict = true)
-                } else if (isMediaStoreUri(uri)) {
-                    val uriStr = uri.toString()
-                    val entry = clbDao.findBySourceUri(uriStr)
-                        ?: lastEntry?.takeIf { it.sourceUri == uriStr }
-                    if (entry != null) {
-                        delay(400L)
-                        deleteSourceMediaUri(context, entry.id, uriStr, strict = true)
-                    } else if (isScreenshotUri(context, uri)) {
-                        delay(400L)
-                        deleteMediaUri(context, uri, entryId = -1, strict = true)
-                    }
+                    return@launch
+                }
+                val mediaUri = resolveMediaStoreImageUri(context, uri)
+                    ?: findRecentScreenshotMediaUri(context, uri)
+                    ?: return@launch
+                val mediaUriStr = mediaUri.toString()
+                val rawUriStr = uri.toString()
+                val entry = clbDao.findBySourceUri(mediaUriStr)
+                    ?: (if (rawUriStr != mediaUriStr) clbDao.findBySourceUri(rawUriStr) else null)
+                    ?: lastEntry?.takeIf { it.sourceUri == mediaUriStr || it.sourceUri == rawUriStr }
+                if (entry != null) {
+                    delay(400L)
+                    deleteSourceMediaUri(context, entry.id, entry.sourceUri ?: mediaUriStr, strict = true)
+                } else if (isScreenshotUri(context, mediaUri)) {
+                    delay(400L)
+                    deleteMediaUri(context, mediaUri, entryId = -1, strict = true)
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Failed to delete media image on system paste attempt for $uri")
@@ -637,16 +805,22 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
             mutex.withLock {
                 val firstUri = if (clip.itemCount > 0) clip.getItemAt(0)?.uri else null
                 if (firstUri != null) {
-                    val existing = resolveLocalFileProviderImagePath(appContext, firstUri)?.let {
-                        clbDao.findByImagePath(it)
-                    } ?: if (isMediaStoreUri(firstUri)) {
-                        clbDao.findBySourceUri(firstUri.toString())
-                    } else {
-                        null
+                    val existing = resolveLocalFileProviderImagePath(appContext, firstUri)?.let { localPath ->
+                        clbDao.findByImagePath(localPath)
+                            ?: lastEntry?.takeIf { it.imagePath == localPath }
+                    } ?: (resolveMediaStoreImageUri(appContext, firstUri)
+                        ?: findRecentScreenshotMediaUri(appContext, firstUri))?.let { mediaUri ->
+                        val mediaUriStr = mediaUri.toString()
+                        val rawUriStr = firstUri.toString()
+                        clbDao.findBySourceUri(mediaUriStr)
+                            ?: (if (rawUriStr != mediaUriStr) clbDao.findBySourceUri(rawUriStr) else null)
+                            ?: lastEntry?.takeIf { it.sourceUri == mediaUriStr || it.sourceUri == rawUriStr }
                     }
                     if (existing != null) {
                         val ts = clip.timestamp()
-                        clbDao.updateTime(existing.id, ts)
+                        if (existing.id > 0) {
+                            clbDao.updateTime(existing.id, ts)
+                        }
                         updateLastEntry(existing.copy(timestamp = ts))
                         return@withLock
                     }

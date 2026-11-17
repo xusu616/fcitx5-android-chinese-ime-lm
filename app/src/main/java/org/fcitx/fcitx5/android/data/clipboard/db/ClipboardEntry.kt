@@ -74,11 +74,7 @@ data class ClipboardEntry(
                     ?: "image/png"
                 val file = ClipboardManager.saveImageToLocal(appContext, item.uri, mimeType)
                 if (file != null) {
-                    val sourceUri = if (ClipboardManager.isScreenshotUri(appContext, item.uri)) {
-                        item.uri.toString()
-                    } else {
-                        null
-                    }
+                    val sourceUri = ClipboardManager.resolveScreenshotSourceUri(appContext, item.uri)
                     return ClipboardEntry(
                         text = item.text?.toString() ?: "",
                         imagePath = file.absolutePath,

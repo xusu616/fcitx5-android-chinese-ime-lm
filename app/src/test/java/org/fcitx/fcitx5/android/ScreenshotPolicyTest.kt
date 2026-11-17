@@ -5,7 +5,9 @@
 package org.fcitx.fcitx5.android
 
 import org.fcitx.fcitx5.android.data.clipboard.ScreenshotPolicy
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,5 +37,22 @@ class ScreenshotPolicyTest {
         assertTrue(ScreenshotPolicy.isScreenshotNameOrPath("IMG_002.jpg", "DCIM/截屏/"))
         assertTrue(ScreenshotPolicy.isScreenshotNameOrPath("screencapture_01.png", "Pictures/"))
         assertFalse(ScreenshotPolicy.isScreenshotNameOrPath("IMG_20261116.jpg", "DCIM/Camera/"))
+    }
+
+    @Test
+    fun mediaStoreAuthorityAndDocumentIdParsing() {
+        assertTrue(ScreenshotPolicy.isMediaStoreAuthority("media"))
+        assertTrue(ScreenshotPolicy.isMediaStoreAuthority("0@media"))
+        assertTrue(ScreenshotPolicy.isMediaStoreAuthority("10@media"))
+        assertFalse(ScreenshotPolicy.isMediaStoreAuthority("@media"))
+        assertFalse(ScreenshotPolicy.isMediaStoreAuthority("abc@media"))
+        assertFalse(ScreenshotPolicy.isMediaStoreAuthority("com.android.systemui.fileprovider"))
+        assertFalse(ScreenshotPolicy.isMediaStoreAuthority(null))
+
+        assertEquals(99070L, ScreenshotPolicy.parseMediaDocumentImageId("image:99070"))
+        assertNull(ScreenshotPolicy.parseMediaDocumentImageId("video:99070"))
+        assertNull(ScreenshotPolicy.parseMediaDocumentImageId("image:abc"))
+        assertNull(ScreenshotPolicy.parseMediaDocumentImageId("image:-1"))
+        assertNull(ScreenshotPolicy.parseMediaDocumentImageId(null))
     }
 }
