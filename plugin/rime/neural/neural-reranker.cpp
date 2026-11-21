@@ -8,11 +8,13 @@
 #include "typing-corrector.h"
 #include "sentence-decoder.h"
 #include "mixed-abbreviations.h"
+#include "rime-preedit.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include <android/log.h>
@@ -26,6 +28,7 @@
 #include <rime/key_event.h>
 #include <rime/registry.h>
 #include <rime/schema.h>
+#include <rime/service.h>
 #include <rime/translation.h>
 
 extern "C" {
@@ -113,6 +116,45 @@ private:
     size_t cursor_ = 0;
 };
 
+rime::CandidateList rankMixedAbbreviations(rime::Translation &source,
+                                           rime::CandidateList alternatives) {
+    const auto first = source.Peek();
+    const auto leader = rime::As<rime::Phrase>(rime::Candidate::GetGenuineCandidate(first));
+    struct Ranked {
+        rime::an<rime::Candidate> candidate;
+        int selections;
+    };
+    std::vector<Ranked> complete;
+    rime::CandidateList remaining;
+    for (size_t index = 0; index < kCandidateCount && !source.exhausted(); ++index) {
+        auto candidate = source.Peek();
+        source.Next();
+        const auto phrase = rime::As<rime::Phrase>(rime::Candidate::GetGenuineCandidate(candidate));
+        if (candidate->start() == leader->start() && candidate->end() == leader->end() &&
+            phrase && (phrase->type() == "phrase" || phrase->type() == "user_phrase") &&
+            phrase->is_exact_match() && phrase->language() == leader->language() &&
+            phrase->code() == leader->code()) {
+            complete.push_back({std::move(candidate), chinese_ime_lm::learnedSelections(*phrase)});
+        } else {
+            remaining.push_back(std::move(candidate));
+        }
+    }
+    for (auto &candidate : alternatives) {
+        const int selections = chinese_ime_lm::learnedSelections(
+            static_cast<const rime::Phrase &>(*candidate));
+        complete.push_back({std::move(candidate), selections});
+    }
+    // Native full spellings are the default tie-breaker. Selection counts can
+    // move any learned result ahead of them regardless of its spelling path.
+    std::stable_sort(complete.begin(), complete.end(), [](const Ranked &left, const Ranked &right) {
+        return left.selections > right.selections;
+    });
+    rime::CandidateList result;
+    for (auto &ranked : complete) result.push_back(std::move(ranked.candidate));
+    for (auto &candidate : remaining) result.push_back(std::move(candidate));
+    return result;
+}
+
 class ChineseImeLmFilter final : public rime::Filter {
 public:
     explicit ChineseImeLmFilter(const rime::Ticket &ticket) : Filter(ticket) {
@@ -127,6 +169,7 @@ public:
         engine_->schema()->config()->GetBool(name_space_ + "/enable_contextual_abbreviations", &contextualAbbreviations_);
         engine_->schema()->config()->GetBool(name_space_ + "/enable_sentence_alternatives", &alternatives_);
         engine_->schema()->config()->GetBool(name_space_ + "/enable_mixed_abbreviations", &mixedAbbreviations_);
+        engine_->schema()->config()->GetBool(name_space_ + "/enable_adaptive_candidate_order", &adaptiveOrder_);
         engine_->schema()->config()->GetBool(name_space_ + "/use_commit_history", &commitHistory_);
         auto clear = [this](rime::Context *) { decoderCache_.Clear(); };
         committed_ = engine_->context()->commit_notifier().connect([this](rime::Context *ctx) {
@@ -179,11 +222,16 @@ public:
             const auto &input = engine_->context()->input();
             if (first->end() == input.size()) {
                 auto extra = chinese_ime_lm::mixedAbbreviationPhrases(first,
-                    input.substr(first->start(), first->end() - first->start()));
+                    input.substr(first->start(), first->end() - first->start()), adaptiveOrder_);
                 if (!extra.empty()) {
-                    source->Next();
-                    extra.insert(extra.begin(), first);
-                    return rime::New<BufferedTranslation>(std::move(extra), std::move(source));
+                    if (adaptiveOrder_) {
+                        extra = rankMixedAbbreviations(*source, std::move(extra));
+                        source = rime::New<BufferedTranslation>(std::move(extra), std::move(source));
+                    } else {
+                        source->Next();
+                        extra.insert(extra.begin(), first);
+                        return rime::New<BufferedTranslation>(std::move(extra), std::move(source));
+                    }
                 }
             }
         }
@@ -316,6 +364,7 @@ private:
     bool contextualAbbreviations_ = true;
     bool alternatives_ = true;
     bool mixedAbbreviations_ = true;
+    bool adaptiveOrder_ = true;
     bool commitHistory_ = true;
     chinese_ime_lm::DecoderCache decoderCache_;
     rime::CommitHistory shadowHistory_;
@@ -325,9 +374,37 @@ private:
 };
 } // namespace
 
+std::optional<chinese_ime_lm::SpellingPreedit> rimeSpellingPreedit(RimeSessionId sessionId) {
+    const auto session = rime::Service::instance().GetSession(sessionId);
+    if (!session) return std::nullopt;
+    bool enabled = true;
+    session->schema()->config()->GetBool("chinese_ime_lm/enable_editable_preedit", &enabled);
+    const auto &context = *session->context();
+    const auto &input = context.input();
+    if (!enabled || input.empty() || context.composition().empty()) return std::nullopt;
+
+    std::set<size_t> boundaries;
+    for (const auto &segment : context.composition()) {
+        if (segment.start == segment.end) continue;
+        if (!segment.HasTag("abc")) return std::nullopt;
+        boundaries.insert(segment.start);
+        const auto phrase = rime::As<rime::Phrase>(
+            rime::Candidate::GetGenuineCandidate(segment.GetSelectedCandidate()));
+        if (!phrase) continue;
+        const auto spans = phrase->spans();
+        auto position = phrase->start();
+        for (size_t syllable = 1; syllable < spans.Count(); ++syllable) {
+            position = spans.NextStop(position);
+            boundaries.insert(position);
+        }
+    }
+    return chinese_ime_lm::spellingPreedit(input, context.caret_pos(), boundaries);
+}
+
 void registerChineseImeLm(const char *directory, const char *sharedDirectory) {
     userDataDirectory = directory;
     sharedDataDirectory = sharedDirectory;
+    registerNeuralCustomPhrases();
     rime::Registry::instance().Register(
         "chinese_ime_lm", new rime::Component<ChineseImeLmFilter>());
     rime::Registry::instance().Register("corrector", new NeuralCorrectorComponent);

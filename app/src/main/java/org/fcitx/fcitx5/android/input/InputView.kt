@@ -202,6 +202,8 @@ class InputView(
     }
 
     val keyboardView: View
+    val editableSpellingView: View?
+        get() = preedit.ui.editableSpellingView
 
     init {
         // MUST call before any operation

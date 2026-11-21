@@ -8,7 +8,7 @@
 - `0.1.4` 增加跨排邻键、每音节两步键盘纠错，以及沿真实拼音路径组合完整候选的束搜索；现有首选排序保留，新组合放在其后供选择。
 - 上下文 = 本输入法在当前 Rime 会话中已提交的文字（仅内存，最多 20 条，回车/方向键清空，退格按字符回退）+ 当前组合中已选中的前文，因此下一次输入会参考上一个词。不读取剪贴板或其他应用的文字。可用 `use_commit_history: false` 关闭。
 - 诊断日志默认关闭；`enable_logging: true` 才输出模型成功加载、重排索引和耗时。加载失败及推理错误仍输出，不记录输入文本。
-- 暂支持 `arm64-v8a`，原版主程序无需修改。插件基于 `048f581c`，应搭配同版本主程序；升级原生库时需重新核对 Rime 头文件和 Fcitx ABI。
+- 暂支持 `arm64-v8a`。候选排序可搭配已验证的原版主程序，拼音栏点击编辑需要本仓库构建的主程序。原版主程序验证基线为 `048f581c`；升级原生库时需重新核对 Rime 头文件和 Fcitx ABI。
 
 ## 构建
 
@@ -188,7 +188,9 @@ patch:
   chinese_ime_lm/enable_contextual_reranking: true  # 有前文时比较同音完整词典词
   chinese_ime_lm/enable_contextual_abbreviations: true  # 同一合法简拼的不同读音展开
   chinese_ime_lm/enable_sentence_alternatives: true  # 同音前缀词条扩展
-  chinese_ime_lm/enable_mixed_abbreviations: true  # 保留完整音节首选，补充混合简拼词
+  chinese_ime_lm/enable_mixed_abbreviations: true  # 补充混合简拼词
+  chinese_ime_lm/enable_adaptive_candidate_order: true  # 混合简拼词和全拼词共享选词排序
+  chinese_ime_lm/enable_editable_preedit: true  # 使用本仓库构建的主程序点击编辑拼音
   chinese_ime_lm/aggressive: true  # 更积极生成完整组合候选，默认开启
   chinese_ime_lm/use_commit_history: true  # 以本会话已提交的文字作上下文，默认开启
 ```
@@ -215,12 +217,18 @@ patch:
 | `enable_contextual_reranking` | `true` | 有前文时比较同音完整词典词，并要求前文增强替代词优势 |
 | `enable_contextual_abbreviations` | `true` | 上下文重排内允许同一合法简拼的不同读音展开 |
 | `enable_sentence_alternatives` | `true` | 用同音前缀词条补充完整句子，参与原有重排 |
-| `enable_mixed_abbreviations` | `true` | 如 `shuo` 补充 `s'huo → 生活`；只查真实双音节词，保留原首选 |
+| `enable_mixed_abbreviations` | `true` | 如 `shuo` 补充 `s'huo → 生活`，只查真实双音节词 |
+| `enable_adaptive_candidate_order` | `true` | 优先展示学过的完整候选，按 Rime 选词次数排序；未学习时全拼词优先。设为 `false` 恢复原先的插入位置 |
+| `enable_editable_preedit` | `true` | 用 `'` 标出拼音栏的音节边界。搭配本仓库构建的主程序，点按可将字号放大到 1.5 倍并编辑拼音 |
 | `aggressive` | `true` | 重新组合词典分词，补充完整候选供选择 |
 | `use_commit_history` | `true` | 把本会话之前提交的文字作为模型上下文；`false` 时只用当前组合中已选的分段 |
 | `model` | 内置 `sentence-model.safetensors` | 从 Rime 用户目录加载自定义 `.safetensors` 权重文件名 |
 
-`enable_mixed_abbreviations` 独立于 `translator/enable_correction`、`aggressive` 和模型重排。它补回“简拼前缀 + 完整音节”的真实词典词，例如 `shuo → 生活`、`shui → 社会`、`fan → 方案`；“说/水/饭”等原首选保留。设为 `false` 后停止补充；显式输入 `s'huo` 仍由原方案解析。测试和限制见 [混合简拼诊断](CORRECTION.md#合法全拼遮住混合简拼shuo-与-shuo)。
+`enable_mixed_abbreviations` 独立于 `translator/enable_correction`、`aggressive` 和模型重排。它补回“简拼前缀 + 完整音节”的真实词典词，例如 `shuo → 生活`、`shui → 社会`、`fan → 方案`。`ta` 默认让原生的「它」「他」「她」排在新找到的 `t'a` 短语之前。启用用户词典时，两类完整候选可按实际选词次数换位。关闭混合简拼后停止补充，显式输入 `s'huo` 仍由原方案解析。测试和限制见 [混合简拼诊断](CORRECTION.md#合法全拼遮住混合简拼shuo-与-shuo)。
+
+拼音栏自动显示的 `'` 只标出边界。用键盘手动键入 `'` 会写入 Rime 的原始输入，按方案的分隔规则切分。
+
+在使用 `table_translator@custom_phrase` 和 `custom_phrase/db_class: stabledb` 的方案里，增强插件支持在 `custom_phrase.txt` 写 `嗯哼=eh`。带权重的条目可以写成 `有=u=3`。Tab 行和等号行可以混用，短语本身含 `=` 时使用 Tab。编辑后重新部署方案。要仅使用原来的 Tab 格式，可在方案 `.custom.yaml` 的 `patch:` 下设置 `custom_phrase/enable_equals_separator: false`。
 
 `enable_multiple_typos` 和 `enable_distant_neighbors` 只控制 `enable_keyboard_neighbors` 的扩展搜索。原生同排纠错是另一条搜索路径；要单独试用新增类型，可同时设置 `enable_native_correction: false`。`enable_keyboard_neighbors` 和 `enable_transposition` 都关、原生纠错仍开时，沿用原版 Rime 搜索行为。
 
@@ -242,7 +250,7 @@ patch:
   chinese_ime_lm/aggressive: false
 ```
 
-以上开关不会移除你在 `speller/algebra` 中手写的 `derive` 等规则；这些规则仍由方案本身执行。自定义滤镜别名如 `chinese_ime_lm@my_lm` 时，滤镜的模型和组句设置写在 `my_lm/` 下；拼写纠错设置仍在 `chinese_ime_lm/` 下。
+手写的 `speller/algebra` 和 `derive` 等规则由方案本身执行。自定义滤镜别名如 `chinese_ime_lm@my_lm` 时，滤镜的模型、组句和候选排序设置写在 `my_lm/` 下。拼写纠错和拼音栏设置写在 `chinese_ime_lm/` 下。
 
 `n/m`、`y/u`、`i/o`、`j/k` 已在原生同排邻键表中；扩展搜索也覆盖 `j/n`、`s/x` 等跨排近键。`nri → nei` 是 `e` 误打为 `r`。额外搜索只扩展原方案不能接受的片段；两步搜索至少保留一个原字母，且比一步纠错受到更大惩罚。两步不是任意替换两个字母，详见 [纠错实现与实测](CORRECTION.md)。
 

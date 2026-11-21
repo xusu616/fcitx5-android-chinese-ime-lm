@@ -31,11 +31,14 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/neural-include/rime/build_config.h"
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/neural-include/X11/keysym.h"
     "#pragma once\n")
 set(NEURAL_CORRECTION_SOURCES "${NEURAL_DIR}/correction-distance.cpp")
+set(NEURAL_CUSTOM_PHRASE_SOURCE "${NEURAL_DIR}/custom-phrase.cpp")
 set(NEURAL_SYLLABIFIER_SYMBOL "_ZN4rime11Syllabifier18BuildSyllableGraphERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEERNS_5PrismEPNS_13SyllableGraphE")
-target_sources(rime PRIVATE "${NEURAL_DIR}/neural-reranker.cpp" ${NEURAL_CORRECTION_SOURCES})
+target_sources(rime PRIVATE "${NEURAL_DIR}/neural-reranker.cpp"
+    "${NEURAL_DIR}/rime-preedit.cpp" ${NEURAL_CORRECTION_SOURCES} ${NEURAL_CUSTOM_PHRASE_SOURCE})
 target_link_options(rime PRIVATE "LINKER:--wrap=${NEURAL_SYLLABIFIER_SYMBOL}")
 # librime 1.16.1 headers use C++17 filesystem::path::u8string semantics.
 set_source_files_properties("${NEURAL_DIR}/neural-reranker.cpp" ${NEURAL_CORRECTION_SOURCES}
+    ${NEURAL_CUSTOM_PHRASE_SOURCE}
     TARGET_DIRECTORY rime PROPERTIES COMPILE_OPTIONS "-std=c++17")
 target_compile_definitions(rime PRIVATE GLOG_USE_GLOG_EXPORT)
 target_include_directories(rime PRIVATE
@@ -51,7 +54,7 @@ target_link_libraries(rime chinese_ime_lm dl log m)
 # Explicit test target; never installed in or packaged with the plugin.
 add_executable(rime-neural-smoke EXCLUDE_FROM_ALL
     "${NEURAL_DIR}/tests/rime-filter-smoke.cpp"
-    "${NEURAL_DIR}/neural-reranker.cpp" ${NEURAL_CORRECTION_SOURCES})
+    "${NEURAL_DIR}/neural-reranker.cpp" ${NEURAL_CORRECTION_SOURCES} ${NEURAL_CUSTOM_PHRASE_SOURCE})
 set_target_properties(rime-neural-smoke PROPERTIES CXX_STANDARD 17)
 target_link_options(rime-neural-smoke PRIVATE
     "LINKER:--wrap=${NEURAL_SYLLABIFIER_SYMBOL}"
@@ -65,9 +68,11 @@ target_include_directories(rime-neural-smoke PRIVATE
 target_compile_definitions(rime-neural-smoke PRIVATE GLOG_USE_GLOG_EXPORT)
 target_link_libraries(rime-neural-smoke PRIVATE ${RIME_TARGET} chinese_ime_lm dl log m)
 
-# Add one initialization hook to a build-directory copy of the pinned upstream
-# file. Leave the submodule pristine; fail if the hook no longer matches upstream.
+# Hook the pinned upstream files in the build directory. Leave the submodule
+# pristine and fail if any anchor changes during an upstream update.
 set(ENGINE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/fcitx5-rime/src/rimeengine.cpp")
+set(STATE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/fcitx5-rime/src/rimestate.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ENGINE_SOURCE}" "${STATE_SOURCE}")
 file(READ "${ENGINE_SOURCE}" ENGINE_CONTENT)
 set(INITIALIZE_LINE "api_->initialize(&fcitx_rime_traits);")
 string(FIND "${ENGINE_CONTENT}" "${INITIALIZE_LINE}" INITIALIZE_POSITION)
@@ -77,12 +82,30 @@ endif()
 string(REPLACE "${INITIALIZE_LINE}"
     "${INITIALIZE_LINE}\n    registerChineseImeLm(fcitx_rime_traits.user_data_dir, fcitx_rime_traits.shared_data_dir);"
     ENGINE_CONTENT "${ENGINE_CONTENT}")
+set(REGISTER_LINE "    constructed_ = true;")
+string(FIND "${ENGINE_CONTENT}" "${REGISTER_LINE}" REGISTER_POSITION)
+if(REGISTER_POSITION EQUAL -1)
+    message(FATAL_ERROR "The upstream Rime engine constructor hook changed")
+endif()
+string(REPLACE "${REGISTER_LINE}" "    registerNeuralRimePreedit(*this);\n${REGISTER_LINE}"
+    ENGINE_CONTENT "${ENGINE_CONTENT}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rimeengine-neural.cpp"
-    "#include \"neural-reranker.h\"\n${ENGINE_CONTENT}")
+    "#include \"neural-reranker.h\"\n#include \"rime-preedit.h\"\n${ENGINE_CONTENT}")
+file(READ "${STATE_SOURCE}" STATE_CONTENT)
+set(PREEDIT_LINE "        updatePreedit(ic, context);")
+string(FIND "${STATE_CONTENT}" "${PREEDIT_LINE}" PREEDIT_POSITION)
+if(PREEDIT_POSITION EQUAL -1)
+    message(FATAL_ERROR "The upstream Rime preedit hook changed")
+endif()
+string(REPLACE "${PREEDIT_LINE}" "${PREEDIT_LINE}\n        updateNeuralRimePreedit(*ic, session);"
+    STATE_CONTENT "${STATE_CONTENT}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rimestate-neural.cpp"
+    "#include \"rime-preedit.h\"\n${STATE_CONTENT}")
 get_target_property(ENGINE_SOURCES rime SOURCES)
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "(^|/)rimeengine\\.cpp$")
+list(FILTER ENGINE_SOURCES EXCLUDE REGEX "(^|/)rime(engine|state)\\.cpp$")
 set_property(TARGET rime PROPERTY SOURCES "${ENGINE_SOURCES}")
-target_sources(rime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/rimeengine-neural.cpp")
+target_sources(rime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/rimeengine-neural.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/rimestate-neural.cpp")
 target_include_directories(rime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fcitx5-rime/src")
 
 install(FILES "${NEURAL_DIR}/LICENSE"

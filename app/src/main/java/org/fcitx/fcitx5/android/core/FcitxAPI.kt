@@ -56,6 +56,7 @@ interface FcitxAPI {
     suspend fun isEmpty(): Boolean
     suspend fun reset()
     suspend fun moveCursor(position: Int)
+    suspend fun moveRimePreeditCursor(position: Int, expectedPreedit: String)
 
     suspend fun availableIme(): Array<InputMethodEntry>
     suspend fun enabledIme(): Array<InputMethodEntry>

@@ -6,6 +6,7 @@
 #include "sentence-alternatives.h"
 #include "sentence-decoder.h"
 #include "mixed-abbreviations.h"
+#include "rime-preedit.h"
 #include <rime_api.h>
 #include <rime/candidate.h>
 #include <rime/component.h>
@@ -196,6 +197,117 @@ void check(RimeApi *api, RimeSessionId session, const char *input,
     require(api->get_commit(session, &commit), "Selected candidate did not commit");
     require(commit.text == std::string(expected), "Selected candidate changed identity");
     api->free_commit(&commit);
+}
+
+void writeMixedAbbreviationSchema(const std::string &directory, const char *id, bool adaptive) {
+    std::ofstream file(directory + "/" + id + ".schema.yaml");
+    file << "schema:\n  schema_id: " << id << "\n  name: learning\n  version: '1'\n"
+            "engine:\n  processors: [speller, selector, express_editor]\n"
+            "  segmentors: [abc_segmentor, fallback_segmentor]\n"
+            "  translators: [script_translator]\n  filters: [chinese_ime_lm, uniquifier]\n"
+            "speller:\n  alphabet: abcdefghijklmnopqrstuvwxyz\n  delimiter: \" '\"\n"
+            "  algebra: ['abbrev/^([a-z]).+$/$1/']\n"
+            "translator:\n  dictionary: learning_fixture\n"
+            "chinese_ime_lm:\n  enable_reranking: false\n"
+            "  enable_sentence_alternatives: false\n  aggressive: false\n"
+            "  enable_adaptive_candidate_order: " << (adaptive ? "true" : "false") << "\n"
+            "  enable_editable_preedit: " << (adaptive ? "true" : "false") << "\n";
+    require(static_cast<bool>(file), "Cannot write learning fixture schema");
+}
+
+void checkMixedAbbreviationLearning(RimeApi *api, RimeSessionId session) {
+    require(api->select_schema(session, "learning"), "Cannot select learning fixture");
+    const auto *context = rime::Service::instance().GetSession(session)->context();
+    auto candidatesFor = [&](const char *input) {
+        api->clear_composition(session);
+        for (const char *key = input; *key; ++key) api->process_key(session, *key, 0);
+        require(!context->composition().empty() && context->composition().back().menu,
+                "Learning input did not create a menu");
+        auto menu = context->composition().back().menu;
+        std::vector<std::string> texts;
+        const auto count = menu->Prepare(20);
+        for (size_t index = 0; index < count; ++index)
+            texts.push_back(menu->GetCandidateAt(index)->text());
+        return texts;
+    };
+    auto learn = [&](const std::string &expected, int times) {
+        for (int iteration = 0; iteration < times; ++iteration) {
+            const auto candidates = candidatesFor("ta");
+            const auto found = std::find(candidates.begin(), candidates.end(), expected);
+            require(found != candidates.end(), "Learning candidate is missing");
+            require(api->select_candidate(session, std::distance(candidates.begin(), found)),
+                    "Cannot select the learning candidate");
+            RIME_STRUCT(RimeCommit, commit);
+            require(api->get_commit(session, &commit), "Learning candidate did not commit");
+            require(commit.text == expected, "Learning candidate changed identity");
+            api->free_commit(&commit);
+            api->process_key(session, 0xff0d, 0);
+        }
+    };
+    const auto initial = candidatesFor("ta");
+    require(initial.size() >= 5 && initial[0] == "它" && initial[1] == "他" && initial[2] == "她",
+            "Unlearned mixed abbreviations pushed down single characters");
+    learn("她", 2);
+    learn("他", 3);
+    const auto learned = candidatesFor("ta");
+    require(learned.size() >= 5 && learned[0] == "他" && learned[1] == "她" && learned[2] == "它",
+            "Both commonly selected single characters must move to the front");
+    learn("天啊", 4);
+    const auto mixed = candidatesFor("ta");
+    require(mixed.size() >= 5 && mixed[0] == "天啊" && mixed[1] == "他" && mixed[2] == "她",
+            "A frequently selected mixed abbreviation must be able to outrank single characters");
+    const auto explicitSplit = candidatesFor("t'a");
+    require(!explicitSplit.empty() && explicitSplit.front() == "天啊",
+            "Explicit delimiter was overridden by a learned full spelling");
+
+    candidatesFor("nihao");
+    const auto preedit = rimeSpellingPreedit(session);
+    require(preedit && preedit->text == "ni'hao" && preedit->cursor == 6,
+            "Rime preedit lost an automatic syllable boundary");
+    api->set_caret_pos(session, preedit->rawPositions[3]);
+    api->process_key(session, 0xff08, 0);
+    require(std::string(api->get_input(session)) == "nhao", "Backspace deleted the wrong letter");
+    api->process_key(session, 'i', 0);
+    require(std::string(api->get_input(session)) == "nihao", "Rime did not insert at the tapped position");
+
+    require(api->select_schema(session, "learning_legacy"), "Cannot select legacy learning fixture");
+    const auto legacy = candidatesFor("ta");
+    require(legacy.size() >= 5 && legacy[0] == "他" && legacy[1] == "天啊",
+            "Disabling adaptive order did not restore mixed-abbreviation insertion");
+    require(!rimeSpellingPreedit(session), "Disabling editable preedit did not restore schema formatting");
+}
+
+void writeCustomPhraseSchema(const std::string &directory, const char *id, bool allowEquals) {
+    std::ofstream file(directory + "/" + id + ".schema.yaml");
+    file << "schema:\n  schema_id: " << id << "\n  name: custom phrases\n  version: '1'\n"
+            "engine:\n  processors: [speller, selector, express_editor]\n"
+            "  segmentors: [abc_segmentor, fallback_segmentor]\n"
+            "  translators: [table_translator@custom_phrase]\n"
+            "speller:\n  alphabet: abcdefghijklmnopqrstuvwxyz\n"
+            "custom_phrase:\n  dictionary: ''\n  db_class: stabledb\n  user_dict: shortcuts\n"
+            "  enable_completion: false\n  enable_sentence: false\n";
+    if (!allowEquals) file << "  enable_equals_separator: false\n";
+    require(static_cast<bool>(file), "Cannot write custom phrase fixture schema");
+}
+
+void checkCustomPhrases(RimeApi *api, RimeSessionId session) {
+    auto checkLeader = [&](const char *input, const char *expected) {
+        api->clear_composition(session);
+        for (const char *key = input; *key; ++key) api->process_key(session, *key, 0);
+        RIME_STRUCT(RimeContext, context);
+        require(api->get_context(session, &context), "Cannot read custom phrase menu");
+        const auto count = context.menu.num_candidates;
+        const std::string leader = count > 0 ? context.menu.candidates[0].text : "";
+        api->free_context(&context);
+        require(leader == expected, "Wrong custom phrase leader");
+    };
+    require(api->select_schema(session, "equals_phrase"), "Cannot select custom phrase fixture");
+    checkLeader("eh", "嗯哼");
+    checkLeader("wt", "高");
+    checkLeader("tsv", "保留=x");
+    require(api->select_schema(session, "tabs_phrase"), "Cannot select TSV-only fixture");
+    checkLeader("eh", "");
+    checkLeader("tsv", "保留=x");
 }
 
 int checkSpellings(const std::string &cases) {
@@ -430,6 +542,18 @@ int main(int argc, char **argv) {
     std::ofstream(scratch + "/logging_alias.schema.yaml", std::ios::app) <<
         "chinese_ime_lm:\n  enable_logging: false\n"
         "log_alias:\n  enable_logging: true\n";
+    writeMixedAbbreviationSchema(scratch, "learning", true);
+    writeMixedAbbreviationSchema(scratch, "learning_legacy", false);
+    writeCustomPhraseSchema(scratch, "equals_phrase", true);
+    writeCustomPhraseSchema(scratch, "tabs_phrase", false);
+    std::ofstream(scratch + "/shortcuts.txt") <<
+        "# Rime table\n#@/db_name\tshortcuts\n#@/db_type\ttabledb\n"
+        "嗯哼=eh\n低=wt=1\n高 = wt = 3\n保留=x\ttsv\n";
+    std::ofstream(scratch + "/learning_fixture.dict.yaml") <<
+        "---\nname: learning_fixture\nversion: '1'\nsort: by_weight\n...\n"
+        "它\tta\t200\n他\tta\t100\n她\tta\t90\n"
+        "天啊\ttian a\t120\n他啊\tta a\t75\n痛啊\ttong a\t50\n啊\ta\t100\n"
+        "你\tni\t100\n好\thao\t100\n你好\tni hao\t200\n";
     std::ofstream(scratch + "/default.yaml") <<
         "config_version: '1'\nschema_list:\n  - schema: baseline\n";
 
@@ -452,6 +576,10 @@ int main(int argc, char **argv) {
     require(api->deploy_schema((scratch + "/disabled.schema.yaml").c_str()), "Deploy disabled failed");
     for (const auto id : {"logging_on", "logging_off", "logging_error", "logging_alias"})
         require(api->deploy_schema((scratch + "/" + id + ".schema.yaml").c_str()), "Deploy logging schema failed");
+    for (const auto id : {"learning", "learning_legacy"})
+        require(api->deploy_schema((scratch + "/" + id + ".schema.yaml").c_str()), "Deploy learning schema failed");
+    for (const auto id : {"equals_phrase", "tabs_phrase"})
+        require(api->deploy_schema((scratch + "/" + id + ".schema.yaml").c_str()), "Deploy custom phrase fixture failed");
     const auto session = api->create_session();
     require(session != 0, "Cannot create Rime session");
     require(api->select_schema(session, "baseline"), "Cannot select baseline");
@@ -516,6 +644,10 @@ int main(int argc, char **argv) {
     require(errorMessages > errors, "Model-load errors must remain visible with diagnostics off");
     require(diagnosticMessages == beforeFailure, "Missing-model fixture emitted disabled diagnostics");
     std::cout << "PASS: logging defaults off, explicit on/off, alias and retained errors" << std::endl;
+    checkMixedAbbreviationLearning(api, session);
+    std::cout << "PASS: mixed abbreviations share user ranking with native candidates" << std::endl;
+    checkCustomPhrases(api, session);
+    std::cout << "PASS: equals and TSV custom phrases, weights and per-schema opt-out" << std::endl;
     api->destroy_session(session);
     api->finalize();
     std::cout << "PASS: filter ABI, generated sentence promotion, dictionary protection, "

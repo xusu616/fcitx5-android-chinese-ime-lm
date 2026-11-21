@@ -7,6 +7,10 @@
 #include <set>
 
 namespace chinese_ime_lm {
+inline int learnedSelections(const rime::Phrase &phrase) {
+    return phrase.type() == "user_phrase" ? phrase.entry().commit_count : 0;
+}
+
 class MixedAbbreviationSyllabifier final : public rime::PhraseSyllabifier {
 public:
     MixedAbbreviationSyllabifier(size_t start, size_t boundary, size_t end) {
@@ -22,7 +26,8 @@ private:
 // single-syllable spelling (e.g. shuo vs s'huo). Only look up real two-syllable
 // dictionary words; do not generate sentences or guess arbitrary missing letters.
 inline rime::CandidateList mixedAbbreviationPhrases(
-    const rime::an<rime::Candidate> &original, const std::string &input) {
+    const rime::an<rime::Candidate> &original, const std::string &input,
+    bool adaptiveOrder) {
     constexpr size_t limit = 8;
     rime::CandidateList result;
     const auto base = std::dynamic_pointer_cast<rime::Phrase>(
@@ -107,8 +112,13 @@ inline rime::CandidateList mixedAbbreviationPhrases(
         if (useUserDict) collect(translator->user_dict()->Lookup(graph, 0, 2), "user_phrase");
         collect(translator->dict()->Lookup(graph, 0, &translator->blacklist(), false), "phrase");
     }
-    // Limit only the new pool; the original translation and its leader survive.
-    std::stable_sort(result.begin(), result.end(), [](const auto &a, const auto &b) {
+    // Recover learned alternatives before limiting the number of displayed words.
+    std::stable_sort(result.begin(), result.end(), [adaptiveOrder](const auto &a, const auto &b) {
+        if (adaptiveOrder) {
+            const int left = learnedSelections(static_cast<const rime::Phrase &>(*a));
+            const int right = learnedSelections(static_cast<const rime::Phrase &>(*b));
+            if (left != right) return left > right;
+        }
         return a->quality() > b->quality();
     });
     std::set<std::string> seen{original->text()};

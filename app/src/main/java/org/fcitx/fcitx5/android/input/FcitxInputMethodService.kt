@@ -15,6 +15,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
@@ -703,15 +704,24 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         win.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     }
 
-    private var inputViewLocation = intArrayOf(0, 0)
+    private val inputViewLocation = IntArray(2)
+    private val editableSpellingBounds = Rect()
 
     override fun onComputeInsets(outInsets: Insets) {
         if (inputDeviceMgr.isVirtualKeyboard) {
-            inputView?.keyboardView?.getLocationInWindow(inputViewLocation)
+            val view = inputView
+            view?.keyboardView?.getLocationInWindow(inputViewLocation)
             outInsets.apply {
                 contentTopInsets = inputViewLocation[1]
                 visibleTopInsets = inputViewLocation[1]
                 touchableInsets = Insets.TOUCHABLE_INSETS_VISIBLE
+                // Editable spelling is drawn above the keyboard's visible inset.
+                // Include its hit area without resizing or panning the editor.
+                if (view?.editableSpellingView?.getGlobalVisibleRect(editableSpellingBounds) == true) {
+                    touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+                    touchableRegion.set(0, visibleTopInsets, decorView.width, decorView.height)
+                    touchableRegion.union(editableSpellingBounds)
+                }
             }
         } else {
             val n = decorView.findViewById<View>(android.R.id.navigationBarBackground)?.height ?: 0

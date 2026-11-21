@@ -106,6 +106,8 @@ class Fcitx(private val context: Context) : FcitxAPI, FcitxLifecycleOwner {
     override suspend fun isEmpty(): Boolean = withFcitxContext { isInputPanelEmpty() }
     override suspend fun reset() = withFcitxContext { resetInputContext() }
     override suspend fun moveCursor(position: Int) = withFcitxContext { repositionCursor(position) }
+    override suspend fun moveRimePreeditCursor(position: Int, expectedPreedit: String) =
+        withFcitxContext { repositionRimePreeditCursor(position, expectedPreedit) }
     override suspend fun availableIme() =
         withFcitxContext { availableInputMethods() ?: emptyArray() }
 
@@ -283,6 +285,9 @@ class Fcitx(private val context: Context) : FcitxAPI, FcitxLifecycleOwner {
 
         @JvmStatic
         external fun repositionCursor(position: Int)
+
+        @JvmStatic
+        external fun repositionRimePreeditCursor(position: Int, expectedPreedit: String)
 
         @JvmStatic
         external fun toggleInputMethod()

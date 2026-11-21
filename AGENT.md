@@ -2,7 +2,7 @@
 
 ## 项目范围
 
-本分支为官方 Fcitx5 Android 的 Rime 插件加入 chinese-ime-lm 离线候选重排。原版 Android 主程序保持不变；新增功能编译在独立包名的增强版 Rime 插件中。
+本分支为官方 Fcitx5 Android 的 Rime 插件加入 chinese-ime-lm 离线候选重排。候选引擎编译在独立包名的增强版 Rime 插件中，可搭配固定版本的官方主程序。拼音栏点击编辑需要本仓库构建的主程序配合增强插件。
 
 - 原创神经重排集成代码使用 MIT，许可证位于 `plugin/rime/neural/LICENSE`，不覆盖 `vendor/`。根目录 `LICENSE-MIT` 为方便 GitHub 识别的相同副本，维护时保持两份内容一致。Fcitx5 Android 原文件及其修改保留原 LGPL；保留其他依赖的授权和署名，不得将完整仓库或 APK 统一标为 MIT。授权范围见根目录 `NOTICE`。
 - 新 Android/JVM 文件优先 Kotlin，现有 Java 文件保持原语言，避免无关重构。
@@ -85,7 +85,8 @@
 - 相邻字母颠倒搜索和诊断集见 `plugin/rime/neural/CORRECTION.md`；诊断集不能当成总体准确率，模型权重目前未重新训练。
 - `typing-corrector.h` 的两步键盘搜索必须保留正常拼写和至少一个未改字母。Rime 的原始图构建忽略纠错距离；`correction-distance.cpp` 在调用原实现后恢复每步代价。其链接符号与 CMake 中的 `--wrap`、固定 ABI/库校验绑定。移植时必须核对符号及 `neural-syllabifier-accessors.patch`，不得用允许重复符号或删除校验绕过链接问题。
 - 原生/邻键/两处误按/较远键位/交换，以及重排/两种整句扩展，都有 `.custom.yaml` 开关，见插件 README。新增功能也必须允许用户明确写 `false` 关闭，并验证关闭后的行为。未指定别名的滤镜 Ticket 默认配置区为 `filter`，本集成将它映射为 `chinese_ime_lm`；不能直接沿用默认区而使文档中的开关失效。
-- `mixed-abbreviations.h` 只为完整单音节补充方案原生“简拼前缀 + 完整音节”的真实双音节词，最多 8 个、保留原首选。复用现有词典而不创建额外 Memory；每个词必须携带独立的真实原始跨度，不能借用已剪掉简拼路径的原 syllabifier。开关 `enable_mixed_abbreviations: false` 应恢复原候选，且不依赖模型或拼写纠错总开关。
+- `mixed-abbreviations.h` 只为完整单音节补充方案原生“简拼前缀 + 完整音节”的真实双音节词，最多 8 个。复用现有词典而不创建额外 Memory；每个词必须携带独立的真实原始跨度，不能借用已剪掉简拼路径的原 syllabifier。默认完整候选按 Rime 学到的选词次数换位，未学习时完整全拼优先。`enable_adaptive_candidate_order: false` 恢复原来的插入位置。`enable_mixed_abbreviations: false` 停止补词，且不依赖模型或拼写纠错总开关。
+- 拼音栏从 Rime 的原始输入和真实音节边界生成展示文本。自动显示的 `'` 两侧指向同一原始位置，手动输入的 `'` 有自己的原始位置。`enable_editable_preedit: false` 恢复 Rime 原有预编辑文本。
 - 前九项以后的候选必须继续可访问。缓冲候选不能重复、丢失或破坏去重；滤镜放在 `uniquifier` 前。
 - 上下文来自 Rime 会话自身的提交历史（`Context::commit_history()`，内存中最多 20 条，未处理的回车/方向键会清空，未处理的退格按 UTF-8 字符回退，遇到 `thru`/`raw` 截断）加当前组合中已选中的分段。由 `use_commit_history` 控制，写 `false` 时只用当前组合。不增加剪贴板、其他 App 文本或网络读取，不持久化、不记录日志。切换应用不一定清空该历史，这是已知限制。
 - 生产日志只记录加载状态、索引、数量、耗时，禁止记录用户输入和候选正文。诊断日志由滤镜配置区的 `enable_logging` 控制，默认 `false`；关闭时连诊断计时也跳过。模型加载失败和推理错误仍输出。不要通过全局修改上游 Rime/Fcitx 的日志等级实现局部开关。

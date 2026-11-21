@@ -19,6 +19,7 @@
 #include <fcitx/inputmethodentry.h>
 #include <fcitx/inputmethodengine.h>
 #include <fcitx/inputmethodmanager.h>
+#include <fcitx/inputpanel.h>
 #include <fcitx/userinterfacemanager.h>
 #include <fcitx/action.h>
 #include <fcitx/statusarea.h>
@@ -46,6 +47,7 @@
 #include "nativestreambuf.h"
 #include "helper-types.h"
 #include "object-conversion.h"
+#include "rime-preedit-api.h"
 
 
 class Fcitx {
@@ -129,6 +131,21 @@ public:
 
     void repositionCursor(int position) {
         p_frontend->call<fcitx::IAndroidFrontend::repositionCursor>(position);
+    }
+
+    void repositionRimePreeditCursor(int position, const std::string &expectedPreedit) {
+        auto *ic = p_frontend->call<fcitx::IAndroidFrontend::activeInputContext>();
+        if (!ic || !ic->hasFocus()) return;
+        const auto *entry = p_instance->inputMethodEntry(ic);
+        if (!entry || entry->addon() != "rime") return;
+        const auto &preedit = ic->inputPanel().preedit();
+        // The enhanced plugin marks the panel spelling as non-committable.
+        // Ignore taps queued for an earlier spelling or the ordinary plugin.
+        if (preedit.size() != 1 || !preedit.formatAt(0).test(fcitx::TextFormatFlag::DontCommit) ||
+            preedit.toString() != expectedPreedit) return;
+        if (auto *engine = p_instance->inputMethodEngine(ic)) {
+            engine->call<fcitx::INeuralRimePreedit::moveCursor>(engine, ic, position);
+        }
     }
 
     void toggleInputMethod() {
@@ -819,6 +836,14 @@ JNIEXPORT void JNICALL
 Java_org_fcitx_fcitx5_android_core_Fcitx_repositionCursor(JNIEnv *env, jclass clazz, jint position) {
     FCITX_DEBUG() << "repositionCursor: to " << position;
     Fcitx::Instance().repositionCursor(position);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_fcitx_fcitx5_android_core_Fcitx_repositionRimePreeditCursor(
+        JNIEnv *env, jclass clazz, jint position, jstring expectedPreedit) {
+    RETURN_IF_NOT_RUNNING
+    Fcitx::Instance().repositionRimePreeditCursor(position, CString(env, expectedPreedit));
 }
 
 extern "C"
