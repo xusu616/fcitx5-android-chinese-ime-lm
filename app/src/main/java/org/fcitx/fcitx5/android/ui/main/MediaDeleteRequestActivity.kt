@@ -43,6 +43,7 @@ class MediaDeleteRequestActivity : Activity() {
         val uri = targetUri
         if (uri == null || intentSender == null) {
             ClipboardManager.acknowledgeDeleteRequest(requestId)
+            ClipboardManager.mediaDeleteFocus.cancel(requestId)
             resultDelivered = true
             finish()
             disableTransition(isOpen = false)
@@ -108,7 +109,7 @@ class MediaDeleteRequestActivity : Activity() {
     private fun deliverResult(uri: Uri, approved: Boolean) {
         if (resultDelivered) return
         resultDelivered = true
-        ClipboardManager.onDeleteRequestResult(applicationContext, uri, entryId, strict, approved)
+        ClipboardManager.onDeleteRequestResult(applicationContext, uri, entryId, strict, approved, requestId)
     }
 
     private fun disableTransition(isOpen: Boolean) {

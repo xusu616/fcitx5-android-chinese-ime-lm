@@ -38,6 +38,7 @@ import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardEntry
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.data.prefs.ManagedPreference
 import org.fcitx.fcitx5.android.ui.main.MediaDeleteRequestActivity
+import org.fcitx.fcitx5.android.input.FcitxInputMethodService
 import org.fcitx.fcitx5.android.utils.WeakHashSet
 import org.fcitx.fcitx5.android.utils.appContext
 import org.fcitx.fcitx5.android.utils.clipboardManager
@@ -174,6 +175,8 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
 
     private val deletingUris = ConcurrentHashMap.newKeySet<String>()
     private val pendingDeleteRequests = ConcurrentHashMap.newKeySet<String>()
+
+    internal val mediaDeleteFocus = MediaDeleteFocusState()
 
     internal fun shouldDeleteMediaOnPaste(
         autoDelete: Boolean,
@@ -385,8 +388,10 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         uri: Uri,
         entryId: Int,
         strict: Boolean,
-        approved: Boolean
+        approved: Boolean,
+        requestId: String? = null,
     ) {
+        mediaDeleteFocus.finish(requestId)
         val uriStr = uri.toString()
         deletingUris.remove(uriStr)
         launch(Dispatchers.IO) {
@@ -400,7 +405,8 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         context: Context,
         entryId: Int,
         fallbackSourceUri: String,
-        strict: Boolean
+        strict: Boolean,
+        origin: MediaDeleteFocusState.Editor?,
     ) {
         val effectiveUriStr = if (entryId > 0) {
             val dbEntry = clbDao.getAny(entryId)
@@ -414,14 +420,15 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         } else {
             fallbackSourceUri
         }
-        deleteMediaUri(context, Uri.parse(effectiveUriStr), entryId, strict)
+        deleteMediaUri(context, Uri.parse(effectiveUriStr), entryId, strict, origin)
     }
 
     private suspend fun deleteMediaUri(
         context: Context,
         uri: Uri,
         entryId: Int,
-        strict: Boolean
+        strict: Boolean,
+        origin: MediaDeleteFocusState.Editor?,
     ) {
         val targetUri = resolveMediaStoreImageUri(context, uri) ?: uri
         val uriStr = targetUri.toString()
@@ -475,6 +482,9 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
             pendingDeleteRequests.add(requestId)
             val launched = withContext(Dispatchers.Main) {
                 try {
+                    if (origin != null && (context as? FcitxInputMethodService)?.captureMediaDeleteOrigin() == origin) {
+                        mediaDeleteFocus.begin(requestId, origin)
+                    }
                     MediaDeleteRequestActivity.launch(
                         context,
                         sender,
@@ -495,10 +505,12 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
                 launch {
                     delay(3_000L)
                     if (pendingDeleteRequests.remove(requestId)) {
+                        mediaDeleteFocus.cancel(requestId)
                         deletingUris.remove(uriStr)
                     }
                 }
             } else {
+                mediaDeleteFocus.cancel(requestId)
                 pendingDeleteRequests.remove(requestId)
             }
         } finally {
@@ -514,13 +526,15 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
         val autoDelete = clipboardPrefs.autoDeletePastedScreenshot.getValue()
         if (!shouldDeleteMediaOnPaste(autoDelete, strict, committed)) return
         val sourceUriStr = entry.sourceUri ?: return
+        val origin = (context as? FcitxInputMethodService)?.captureMediaDeleteOrigin()
         launch(Dispatchers.IO) {
-            deleteSourceMediaUri(context, entry.id, sourceUriStr, strict)
+            deleteSourceMediaUri(context, entry.id, sourceUriStr, strict, origin)
         }
     }
 
     fun onSystemPasteAttempted(context: Context) {
         if (!AppPrefs.getInstance().clipboard.strictDeletePastedScreenshot.getValue()) return
+        val origin = (context as? FcitxInputMethodService)?.captureMediaDeleteOrigin()
         val clip = try {
             clipboardManager.primaryClip
         } catch (e: Exception) {
@@ -537,7 +551,7 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
                     val entry = clbDao.findByImagePath(localPath)
                         ?: lastEntry?.takeIf { it.imagePath == localPath }
                     val sourceUriStr = entry?.sourceUri ?: return@launch
-                    deleteSourceMediaUri(context, entry.id, sourceUriStr, strict = true)
+                    deleteSourceMediaUri(context, entry.id, sourceUriStr, strict = true, origin = origin)
                     return@launch
                 }
                 val mediaUri = resolveMediaStoreImageUri(context, uri)
@@ -550,10 +564,10 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
                     ?: lastEntry?.takeIf { it.sourceUri == mediaUriStr || it.sourceUri == rawUriStr }
                 if (entry != null) {
                     delay(400L)
-                    deleteSourceMediaUri(context, entry.id, entry.sourceUri ?: mediaUriStr, strict = true)
+                    deleteSourceMediaUri(context, entry.id, entry.sourceUri ?: mediaUriStr, strict = true, origin = origin)
                 } else if (isScreenshotUri(context, mediaUri)) {
                     delay(400L)
-                    deleteMediaUri(context, mediaUri, entryId = -1, strict = true)
+                    deleteMediaUri(context, mediaUri, entryId = -1, strict = true, origin = origin)
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Failed to delete media image on system paste attempt for $uri")

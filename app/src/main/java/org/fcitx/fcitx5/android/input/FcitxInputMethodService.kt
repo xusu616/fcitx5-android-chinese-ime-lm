@@ -58,6 +58,7 @@ import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.CapabilityFlags
 import org.fcitx.fcitx5.android.core.FcitxAPI
 import org.fcitx.fcitx5.android.data.clipboard.ClipboardManager
+import org.fcitx.fcitx5.android.data.clipboard.MediaDeleteFocusState
 import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardEntry
 import java.io.File
 import org.fcitx.fcitx5.android.core.FcitxEvent
@@ -516,6 +517,20 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
     }
 
+    internal fun mediaDeleteEditor(info: EditorInfo? = currentInputEditorInfo): MediaDeleteFocusState.Editor? {
+        val editor = info ?: return null
+        val clientToken = currentInputBinding?.connectionToken ?: return null
+        val targetPackage = editor.packageName ?: return null
+        return MediaDeleteFocusState.Editor(
+            clientToken, targetPackage, editor.fieldId, editor.fieldName, editor.inputType, editor.imeOptions,
+        )
+    }
+
+    internal fun captureMediaDeleteOrigin(): MediaDeleteFocusState.Editor? {
+        if (inputView?.isClipboardWindowVisible != true) return null
+        return mediaDeleteEditor()
+    }
+
     fun commitImage(entry: ClipboardEntry): Boolean {
         var committed = false
         try {
@@ -850,6 +865,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onStartInput(attribute: EditorInfo, restarting: Boolean) {
+        ClipboardManager.mediaDeleteFocus.onEditorStarted(mediaDeleteEditor(attribute), restarting)
         // update selection as soon as possible
         // sometimes when restarting input, onUpdateSelection happens before onStartInput, and
         // initialSel{Start,End} is outdated. but it's the client app's responsibility to send
@@ -1209,6 +1225,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onDestroy() {
+        ClipboardManager.mediaDeleteFocus.clear()
         recreateInputViewPrefs.forEach {
             it.unregisterOnChangeListener(recreateInputViewListener)
         }
