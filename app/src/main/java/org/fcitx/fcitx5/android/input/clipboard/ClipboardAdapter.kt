@@ -7,6 +7,7 @@ package org.fcitx.fcitx5.android.input.clipboard
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.util.LruCache
 import android.view.ViewGroup
 import android.widget.PopupMenu
 import androidx.paging.PagingDataAdapter
@@ -43,9 +44,15 @@ abstract class ClipboardAdapter(
                 oldItem: ClipboardEntry,
                 newItem: ClipboardEntry
             ): Boolean {
-                return oldItem == newItem
+                return oldItem.text == newItem.text &&
+                    oldItem.pinned == newItem.pinned &&
+                    oldItem.sensitive == newItem.sensitive &&
+                    oldItem.imagePath == newItem.imagePath &&
+                    oldItem.type == newItem.type
             }
         }
+
+        private val thumbnailCache = object : LruCache<String, Bitmap>(32) {}
 
         /**
          * excerpt text to show on ClipboardEntryUi, to reduce render time of very long text
@@ -123,13 +130,21 @@ abstract class ClipboardAdapter(
             setEntry(excerptText(entry.text, entry.sensitive && maskSensitive), entry.imagePath, entry.pinned)
             if (!entry.imagePath.isNullOrEmpty()) {
                 val path = entry.imagePath
-                imageView.tag = path
-                imageView.setImageDrawable(null)
-                CoroutineScope(Dispatchers.IO).launch {
-                    val bmp = decodeSampledBitmap(path)
-                    withContext(Dispatchers.Main) {
-                        if (imageView.tag == path) {
-                            imageView.setImageBitmap(bmp)
+                val cached = thumbnailCache.get(path)
+                if (cached != null && !cached.isRecycled) {
+                    imageView.tag = path
+                    imageView.setImageBitmap(cached)
+                } else if (imageView.tag != path || imageView.drawable == null) {
+                    imageView.tag = path
+                    imageView.setImageDrawable(null)
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val bmp = decodeSampledBitmap(path)?.also {
+                            thumbnailCache.put(path, it)
+                        }
+                        withContext(Dispatchers.Main) {
+                            if (imageView.tag == path) {
+                                imageView.setImageBitmap(bmp)
+                            }
                         }
                     }
                 }

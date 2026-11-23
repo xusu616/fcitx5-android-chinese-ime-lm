@@ -43,7 +43,14 @@ object FcitxDaemon {
     private val realFcitx by lazy { Fcitx(appContext) }
 
     // don't leak fcitx instance
-    private val fcitxImpl by lazy { object : FcitxAPI by realFcitx {} }
+    private val fcitxImpl by lazy {
+        object : FcitxAPI by realFcitx {
+            // Stale incremental bytecode omitted this newly added delegated API.
+            override suspend fun moveRimePreeditCursor(position: Int, expectedPreedit: String) {
+                realFcitx.moveRimePreeditCursor(position, expectedPreedit)
+            }
+        }
+    }
 
     private fun mkConnection(name: String) = object : FcitxConnection {
 
