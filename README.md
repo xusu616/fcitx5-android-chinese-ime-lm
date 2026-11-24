@@ -1,4 +1,4 @@
-> 📦 **Release 下载提示**：请前往对应的 GitLab 仓库查看或下载 Release（GitHub 端暂不重复上传）👉 [https://gitlab.com/xusu616/fcitx5-android-chinese-ime-lm/-/releases](https://gitlab.com/xusu616/fcitx5-android-chinese-ime-lm/-/releases) （[GitLab 仓库主页](https://gitlab.com/xusu616/fcitx5-android-chinese-ime-lm)）
+> 📦 **Release 下载**：主程序可从 [GitHub Releases](https://github.com/xusu616/fcitx5-android-chinese-ime-lm/releases) 或 [GitLab Releases](https://gitlab.com/xusu616/fcitx5-android-chinese-ime-lm/-/releases) 下载。增强 Rime 插件本次没有更新，继续使用 [GitLab v0.1.6 的插件 APK](https://gitlab.com/xusu616/fcitx5-android-chinese-ime-lm/-/releases/v0.1.6/downloads/org.fcitx.fcitx5.android.plugin.rime.neural-v0.1.6-0-g665833f4-arm64-v8a-release.apk)。
 
 # fcitx5-android
 

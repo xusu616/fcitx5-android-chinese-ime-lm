@@ -4,28 +4,18 @@
  */
 package org.fcitx.fcitx5.android.input.clipboard
 
-import android.annotation.SuppressLint
-import android.content.ClipData
-import android.content.Intent
 import android.view.View
-import android.view.ViewGroup
-import android.widget.FrameLayout
 import android.widget.PopupMenu
 import androidx.annotation.Keep
-import androidx.core.content.FileProvider
 import androidx.core.text.bold
 import androidx.core.text.buildSpannedString
 import androidx.core.text.color
-import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.StaggeredGridLayoutManager
-import com.google.android.material.snackbar.BaseTransientBottomBar.BaseCallback
-import com.google.android.material.snackbar.Snackbar
-import com.google.android.material.snackbar.SnackbarContentLayout
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
@@ -35,6 +25,7 @@ import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.data.prefs.ManagedPreference
 import org.fcitx.fcitx5.android.data.theme.ThemeManager
 import org.fcitx.fcitx5.android.input.FcitxInputMethodService
+import org.fcitx.fcitx5.android.input.bar.KawaiiBarComponent
 import org.fcitx.fcitx5.android.input.clipboard.ClipboardStateMachine.BooleanKey.ClipboardDbEmpty
 import org.fcitx.fcitx5.android.input.clipboard.ClipboardStateMachine.BooleanKey.ClipboardListeningEnabled
 import org.fcitx.fcitx5.android.input.clipboard.ClipboardStateMachine.State.AddMore
@@ -47,17 +38,12 @@ import org.fcitx.fcitx5.android.input.dependency.theme
 import org.fcitx.fcitx5.android.input.keyboard.KeyboardWindow
 import org.fcitx.fcitx5.android.input.wm.InputWindow
 import org.fcitx.fcitx5.android.input.wm.InputWindowManager
-import org.fcitx.fcitx5.android.utils.AppUtil
 import org.fcitx.fcitx5.android.utils.EventStateMachine
-import org.fcitx.fcitx5.android.utils.clipboardManager
 import org.fcitx.fcitx5.android.utils.item
 import org.fcitx.fcitx5.android.utils.toast
 import org.mechdancer.dependency.manager.must
 import splitties.dimensions.dp
 import splitties.resources.styledColor
-import splitties.views.dsl.core.withTheme
-import timber.log.Timber
-import java.io.File
 
 class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
 
@@ -65,10 +51,8 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
     private val windowManager: InputWindowManager by manager.must()
     private val theme by manager.theme()
 
-    private val snackbarCtx by lazy {
-        context.withTheme(R.style.InputViewSnackbarTheme)
-    }
-    private var snackbarInstance: Snackbar? = null
+    private val kawaiiBar: KawaiiBarComponent by manager.must()
+    private val entryActions: ClipboardEntryActions get() = kawaiiBar.clipboardEntryActions
 
     private lateinit var stateMachine: EventStateMachine<ClipboardStateMachine.State, ClipboardStateMachine.TransitionEvent, ClipboardStateMachine.BooleanKey>
 
@@ -99,59 +83,27 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
             clipboardMaskSensitive
         ) {
             override fun onPin(id: Int) {
-                service.lifecycleScope.launch { ClipboardManager.pin(id) }
+                entryActions.pin(id)
             }
 
             override fun onUnpin(id: Int) {
-                service.lifecycleScope.launch { ClipboardManager.unpin(id) }
+                entryActions.unpin(id)
             }
 
             override fun onEdit(id: Int) {
-                AppUtil.launchClipboardEdit(context, id)
+                entryActions.edit(id)
             }
 
             override fun onCopy(entry: ClipboardEntry) {
-                if (!entry.imagePath.isNullOrEmpty()) {
-                    try {
-                        val file = File(entry.imagePath)
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.clipboard.fileprovider", file)
-                        val clipData = ClipData.newUri(context.contentResolver, "Image", uri)
-                        context.clipboardManager.setPrimaryClip(clipData)
-                        context.toast(R.string.copied_to_clipboard)
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to copy image to clipboard")
-                    }
-                } else {
-                    val clipData = ClipData.newPlainText(null, entry.text)
-                    context.clipboardManager.setPrimaryClip(clipData)
-                    context.toast(R.string.copied_to_clipboard)
-                }
+                entryActions.copy(entry)
             }
 
             override fun onShare(entry: ClipboardEntry) {
-                val target = Intent(Intent.ACTION_SEND).apply {
-                    if (!entry.imagePath.isNullOrEmpty()) {
-                        val file = File(entry.imagePath)
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.clipboard.fileprovider", file)
-                        type = entry.type.ifEmpty { "image/png" }
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    } else {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, entry.text)
-                    }
-                }
-                val chooser = Intent.createChooser(target, null).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                service.startActivity(chooser)
+                entryActions.share(entry)
             }
 
             override fun onDelete(id: Int) {
-                service.lifecycleScope.launch {
-                    ClipboardManager.delete(id)
-                    showUndoSnackbar(id)
-                }
+                entryActions.delete(id)
             }
 
             override fun onPaste(entry: ClipboardEntry) {
@@ -192,10 +144,7 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
 
                 override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                     val entry = adapter.getEntryAt(viewHolder.bindingAdapterPosition) ?: return
-                    service.lifecycleScope.launch {
-                        ClipboardManager.delete(entry.id)
-                        showUndoSnackbar(entry.id)
-                    }
+                    entryActions.delete(entry.id)
                 }
             }).attachToRecyclerView(recyclerView)
             enableUi.enableButton.setOnClickListener {
@@ -227,7 +176,7 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
             menu.item(android.R.string.ok) {
                 service.lifecycleScope.launch {
                     val ids = ClipboardManager.deleteAll(skipPinned)
-                    showUndoSnackbar(*ids)
+                    entryActions.showUndoSnackbar(*ids)
                 }
             }
             setOnDismissListener {
@@ -235,58 +184,6 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
             }
             show()
         }
-    }
-
-    private val pendingDeleteIds = arrayListOf<Int>()
-
-    @SuppressLint("RestrictedApi")
-    private fun showUndoSnackbar(vararg id: Int) {
-        id.forEach { pendingDeleteIds.add(it) }
-        val str = context.resources.getString(R.string.num_items_deleted, pendingDeleteIds.size)
-        snackbarInstance = Snackbar.make(snackbarCtx, ui.root, str, Snackbar.LENGTH_LONG)
-            .setBackgroundTint(theme.popupBackgroundColor)
-            .setTextColor(theme.popupTextColor)
-            .setActionTextColor(theme.genericActiveBackgroundColor)
-            .setAction(R.string.undo) {
-                service.lifecycleScope.launch {
-                    ClipboardManager.undoDelete(*pendingDeleteIds.toIntArray())
-                    pendingDeleteIds.clear()
-                }
-            }
-            .addCallback(object : Snackbar.Callback() {
-                override fun onDismissed(transientBottomBar: Snackbar, event: Int) {
-                    if (snackbarInstance === transientBottomBar) {
-                        snackbarInstance = null
-                    }
-                    when (event) {
-                        BaseCallback.DISMISS_EVENT_SWIPE,
-                        BaseCallback.DISMISS_EVENT_MANUAL,
-                        BaseCallback.DISMISS_EVENT_TIMEOUT -> {
-                            service.lifecycleScope.launch {
-                                ClipboardManager.realDelete()
-                                pendingDeleteIds.clear()
-                            }
-                        }
-                        BaseCallback.DISMISS_EVENT_ACTION,
-                        BaseCallback.DISMISS_EVENT_CONSECUTIVE -> {
-                            // user clicked "undo" or deleted more items which makes a new snackbar
-                        }
-                    }
-                }
-            }).apply {
-                val hMargin = snackbarCtx.dp(24)
-                val vMargin = snackbarCtx.dp(16)
-                view.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-                    leftMargin = hMargin
-                    rightMargin = hMargin
-                    bottomMargin = vMargin
-                }
-                ((view as FrameLayout).getChildAt(0) as SnackbarContentLayout).apply {
-                    messageView.letterSpacing = 0f
-                    actionView.letterSpacing = 0f
-                }
-                show()
-            }
     }
 
     override fun onAttached() {
@@ -319,7 +216,7 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
         adapter.onDetached()
         adapterSubmitJob?.cancel()
         promptMenu?.dismiss()
-        snackbarInstance?.dismiss()
+        entryActions.dismiss()
     }
 
     override val title: String by lazy {
